@@ -1,0 +1,158 @@
+# forecast-score
+
+Forecast verification metrics for meteorological and probabilistic predictions.
+
+`forecast-score` provides the standard verification scores used in numerical weather prediction
+(NWP), prediction markets, and other forecasting domains. Ported from WRFCoin's TypeScript
+implementation (~750 LOC) into a dependency-free Rust crate.
+
+**Minimal dependencies** -- only `serde` for serialization. No runtime, no async.
+
+## Metric categories
+
+| Category | Functions | Use case |
+|----------|-----------|----------|
+| **Continuous** | `mae`, `rmse`, `bias` | Temperature, wind speed, pressure -- any numeric forecast |
+| **Categorical** | `pod`, `far`, `csi`, `categorical_scores` | Binary events: rain/no-rain, frost/no-frost |
+| **Probabilistic** | `brier_score`, `crps` | Probability forecasts, ensemble predictions |
+| **Composite** | `ForecastAccuracyMetrics`, `CategoricalScores` | Bundled results for scoring pipelines |
+
+## Quick start
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+forecast-score = "0.1"
+```
+
+### Continuous metrics
+
+```rust
+use forecast_score::{Pair, mae, rmse, bias};
+
+let pairs = vec![
+    Pair::new(12.0, 10.0),  // predicted 12, observed 10
+    Pair::new(18.0, 20.0),  // predicted 18, observed 20
+];
+
+assert!((mae(&pairs) - 2.0).abs() < 1e-10);   // mean absolute error
+assert!((rmse(&pairs) - 2.0).abs() < 1e-10);   // root mean squared error
+assert!((bias(&pairs) - 0.0).abs() < 1e-10);   // errors cancel out
+```
+
+### Categorical metrics (contingency table)
+
+```rust
+use forecast_score::{pod, far, csi, categorical_scores, Pair};
+
+// Direct computation from contingency counts
+let hits = 10;
+let misses = 2;
+let false_alarms = 3;
+
+assert!((pod(hits, misses) - 0.8333).abs() < 0.001);  // probability of detection
+assert!((far(hits, false_alarms) - 0.2308).abs() < 0.001); // false alarm ratio
+assert!((csi(hits, misses, false_alarms) - 0.6667).abs() < 0.001); // critical success index
+
+// Or compute from forecast-observation pairs at a threshold
+let pairs = vec![
+    Pair::new(0.5, 0.3),  // both above 0.01 -> hit
+    Pair::new(0.0, 0.2),  // miss
+    Pair::new(0.3, 0.0),  // false alarm
+    Pair::new(0.0, 0.0),  // correct negative
+];
+let scores = categorical_scores(&pairs, 0.01);
+assert_eq!(scores.hits, 1);
+assert_eq!(scores.misses, 1);
+```
+
+### Probabilistic metrics
+
+```rust
+use forecast_score::{brier_score, crps};
+
+// Brier Score: measures accuracy of probability forecasts
+// Perfect = 0.0, worst = 1.0
+let probs = vec![0.9, 0.1, 0.8];
+let outcomes = vec![1.0, 0.0, 1.0];  // binary: event happened or not
+let bs = brier_score(&probs, &outcomes);  // close to 0 = good
+
+// CRPS (simplified): reduces to MAE for deterministic forecasts, clamped to [0, 1]
+let forecasts = vec![10.0, 20.0, 30.0];
+let observed = vec![10.0, 20.0, 30.0];
+assert!((crps(&forecasts, &observed)).abs() < 1e-10);  // perfect
+```
+
+### Composite skill score
+
+```rust
+use forecast_score::{Pair, ForecastAccuracyMetrics};
+
+let pairs = vec![
+    Pair::new(22.0, 20.0),
+    Pair::new(18.0, 20.0),
+    Pair::new(20.5, 20.0),
+];
+
+let metrics = ForecastAccuracyMetrics::from_pairs(&pairs);
+assert!(metrics.validate().is_ok());
+println!("MAE={:.2}, RMSE={:.2}, Bias={:.2}, Skill={:.3}",
+    metrics.mae, metrics.rmse, metrics.bias, metrics.skill_score);
+```
+
+## Metric reference
+
+### Continuous
+
+| Metric | Formula | Interpretation |
+|--------|---------|---------------|
+| MAE | `(1/n) * sum(\|predicted - observed\|)` | Average magnitude of errors. Always >= 0. |
+| RMSE | `sqrt((1/n) * sum((predicted - observed)^2))` | Penalizes large errors more than MAE. Always >= MAE. |
+| Bias | `(1/n) * sum(predicted - observed)` | Positive = over-prediction, negative = under-prediction. |
+
+### Categorical
+
+| Metric | Formula | Range |
+|--------|---------|-------|
+| POD (Probability of Detection) | `hits / (hits + misses)` | [0, 1], 1 = perfect |
+| FAR (False Alarm Ratio) | `false_alarms / (hits + false_alarms)` | [0, 1], 0 = perfect |
+| CSI (Critical Success Index) | `hits / (hits + misses + false_alarms)` | [0, 1], 1 = perfect |
+
+### Probabilistic
+
+| Metric | Formula | Range |
+|--------|---------|-------|
+| Brier Score | `(1/n) * sum((probability - outcome)^2)` | [0, 1], 0 = perfect |
+| CRPS (simplified) | `(1/n) * sum(\|forecast - observed\|)`, clamped to [0, 1] | [0, 1], 0 = perfect |
+
+## WRFCoin context
+
+This crate was extracted from the [WRFCoin](https://github.com/wrfcoin) blockchain platform, which
+uses these metrics in its consensus-level forecast verification pipeline. The TypeScript source
+(`backend/server/services/forecast/forecast-verification-service.ts`, ~750 LOC) was ported to Rust
+to serve as the canonical implementation.
+
+Within WRFCoin, `ForecastAccuracyMetrics` feeds into `ForecastVerificationReceipt` in the Proof-of-Publishing
+consensus engine, determining collector rewards based on forecast accuracy.
+
+See the [Rust crate audit table](https://github.com/wrfcoin/core4/blob/main/docs/plans/wrfcoin_rust_crate_audit_table.md)
+for the full extraction plan and related crates (`meteo-types`, `wrf-primitives`, `reward-engine`, etc.).
+
+Tracking issue: [wrfcoin/core4#544](https://github.com/wrfcoin/core4/issues/544)
+
+## Known issues
+
+See [#1](https://github.com/wrfcoin/forecast-score/issues/1) for code review feedback on v0.1.0:
+
+- **CRPS clamping bug** -- `crps()` clamps to [0, 1], making it useless for domains with values > 1.0
+  (temperature in K, wind speed in m/s). A 5-degree and 500-degree error both return 1.0.
+- **Silent length truncation** -- `brier_score()` and `crps()` silently drop trailing elements when
+  input slices have different lengths.
+- **Missing `ForecastAccuracyMetrics` tests** -- `from_pairs()` and `validate()` have no test coverage.
+- **No input validation** on `brier_score()` (accepts values outside [0, 1]).
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.
