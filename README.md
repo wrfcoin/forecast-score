@@ -14,7 +14,7 @@ implementation (~750 LOC) into a dependency-free Rust crate.
 |----------|-----------|----------|
 | **Continuous** | `mae`, `rmse`, `bias` | Temperature, wind speed, pressure -- any numeric forecast |
 | **Categorical** | `pod`, `far`, `csi`, `categorical_scores` | Binary events: rain/no-rain, frost/no-frost |
-| **Probabilistic** | `brier_score`, `crps` | Probability forecasts, ensemble predictions |
+| **Probabilistic** | `brier_score`, `crps`, `brier_score_checked`, `crps_checked` | Probability forecasts, ensemble predictions |
 | **Composite** | `ForecastAccuracyMetrics`, `CategoricalScores` | Bundled results for scoring pipelines |
 
 ## Quick start
@@ -70,18 +70,18 @@ assert_eq!(scores.misses, 1);
 ### Probabilistic metrics
 
 ```rust
-use forecast_score::{brier_score, crps};
+use forecast_score::{brier_score_checked, crps_checked};
 
 // Brier Score: measures accuracy of probability forecasts
 // Perfect = 0.0, worst = 1.0
 let probs = vec![0.9, 0.1, 0.8];
 let outcomes = vec![1.0, 0.0, 1.0];  // binary: event happened or not
-let bs = brier_score(&probs, &outcomes);  // close to 0 = good
+let bs = brier_score_checked(&probs, &outcomes).unwrap();  // close to 0 = good
 
-// CRPS (simplified): reduces to MAE for deterministic forecasts, clamped to [0, 1]
+// CRPS (deterministic approximation): reduces to MAE for deterministic forecasts
 let forecasts = vec![10.0, 20.0, 30.0];
 let observed = vec![10.0, 20.0, 30.0];
-assert!((crps(&forecasts, &observed)).abs() < 1e-10);  // perfect
+assert!((crps_checked(&forecasts, &observed).unwrap()).abs() < 1e-10);  // perfect
 ```
 
 ### Composite skill score
@@ -124,7 +124,7 @@ println!("MAE={:.2}, RMSE={:.2}, Bias={:.2}, Skill={:.3}",
 | Metric | Formula | Range |
 |--------|---------|-------|
 | Brier Score | `(1/n) * sum((probability - outcome)^2)` | [0, 1], 0 = perfect |
-| CRPS (simplified) | `(1/n) * sum(\|forecast - observed\|)`, clamped to [0, 1] | [0, 1], 0 = perfect |
+| CRPS (deterministic approximation) | `(1/n) * sum(\|forecast - observed\|)` | [0, +inf), 0 = perfect |
 
 ## WRFCoin context
 
@@ -141,16 +141,11 @@ for the full extraction plan and related crates (`meteo-types`, `wrf-primitives`
 
 Tracking issue: [wrfcoin/core4#544](https://github.com/wrfcoin/core4/issues/544)
 
-## Known issues
+## Input contracts
 
-See [#1](https://github.com/wrfcoin/forecast-score/issues/1) for code review feedback on v0.1.0:
-
-- **CRPS clamping bug** -- `crps()` clamps to [0, 1], making it useless for domains with values > 1.0
-  (temperature in K, wind speed in m/s). A 5-degree and 500-degree error both return 1.0.
-- **Silent length truncation** -- `brier_score()` and `crps()` silently drop trailing elements when
-  input slices have different lengths.
-- **Missing `ForecastAccuracyMetrics` tests** -- `from_pairs()` and `validate()` have no test coverage.
-- **No input validation** on `brier_score()` (accepts values outside [0, 1]).
+- `brier_score()` and `crps()` require equal-length slices and finite values.
+- `brier_score()` additionally requires probabilities in [0, 1] and binary outcomes (0.0 or 1.0).
+- If you want explicit error handling instead of panics, use `brier_score_checked()` and `crps_checked()`.
 
 ## License
 
