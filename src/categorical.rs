@@ -50,6 +50,8 @@ pub fn csi(hits: u64, misses: u64, false_alarms: u64) -> f64 {
 
 /// Bundle of categorical scores for a single threshold.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "bindings/"))]
 pub struct CategoricalScores {
     pub threshold: f64,
     pub hits: u64,

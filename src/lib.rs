@@ -48,6 +48,8 @@ impl std::error::Error for ScoreError {}
 
 /// A forecast–observation pair.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "bindings/"))]
 pub struct Pair {
     pub predicted: f64,
     pub observed: f64,
@@ -66,6 +68,8 @@ impl Pair {
 ///
 /// Compatible with `ForecastAccuracyMetrics` in WRFCoin's shared-protocol.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "bindings/"))]
 pub struct ForecastAccuracyMetrics {
     pub mae: f64,
     pub rmse: f64,
