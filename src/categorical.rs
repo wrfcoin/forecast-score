@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// POD = hits / (hits + misses)
 ///
 /// Returns 0.0 if there are no observed events (hits + misses = 0).
+#[inline]
 pub fn pod(hits: u64, misses: u64) -> f64 {
     let denom = hits + misses;
     if denom == 0 {
@@ -24,6 +25,7 @@ pub fn pod(hits: u64, misses: u64) -> f64 {
 /// FAR = false_alarms / (hits + false_alarms)
 ///
 /// Returns 0.0 if there are no forecast events (hits + false_alarms = 0).
+#[inline]
 pub fn far(hits: u64, false_alarms: u64) -> f64 {
     let denom = hits + false_alarms;
     if denom == 0 {
@@ -37,6 +39,7 @@ pub fn far(hits: u64, false_alarms: u64) -> f64 {
 /// CSI = hits / (hits + misses + false_alarms)
 ///
 /// Returns 0.0 if there are no events (all three = 0).
+#[inline]
 pub fn csi(hits: u64, misses: u64, false_alarms: u64) -> f64 {
     let denom = hits + misses + false_alarms;
     if denom == 0 {

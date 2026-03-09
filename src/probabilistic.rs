@@ -1,15 +1,12 @@
 //! Probabilistic verification metrics: Brier Score, CRPS.
 
-fn ensure_equal_len(
-    lhs_len: usize,
-    rhs_len: usize,
-    metric_name: &'static str,
-) -> Result<(), &'static str> {
+use crate::ScoreError;
+
+fn ensure_equal_len(lhs_len: usize, rhs_len: usize) -> Result<(), ScoreError> {
     if lhs_len != rhs_len {
-        return Err(match metric_name {
-            "brier_score" => "brier_score: input slices must have equal length",
-            "crps" => "crps: input slices must have equal length",
-            _ => "input slices must have equal length",
+        return Err(ScoreError::LengthMismatch {
+            expected: lhs_len,
+            got: rhs_len,
         });
     }
     Ok(())
@@ -18,18 +15,22 @@ fn ensure_equal_len(
 fn validate_brier_inputs(
     forecast_probs: &[f64],
     observed_outcomes: &[f64],
-) -> Result<(), &'static str> {
+) -> Result<(), ScoreError> {
     if !forecast_probs
         .iter()
         .all(|p| p.is_finite() && (0.0..=1.0).contains(p))
     {
-        return Err("brier_score: forecast probabilities must be finite and in [0, 1]");
+        return Err(ScoreError::InvalidInput(
+            "forecast probabilities must be finite and in [0, 1]",
+        ));
     }
     if !observed_outcomes
         .iter()
         .all(|o| o.is_finite() && (*o == 0.0 || *o == 1.0))
     {
-        return Err("brier_score: observed outcomes must be finite 0.0 or 1.0 values");
+        return Err(ScoreError::InvalidInput(
+            "observed outcomes must be finite 0.0 or 1.0 values",
+        ));
     }
     Ok(())
 }
@@ -37,12 +38,12 @@ fn validate_brier_inputs(
 fn validate_crps_inputs(
     forecast_values: &[f64],
     observed_values: &[f64],
-) -> Result<(), &'static str> {
+) -> Result<(), ScoreError> {
     if !forecast_values.iter().all(|v| v.is_finite()) {
-        return Err("crps: forecast values must be finite");
+        return Err(ScoreError::InvalidInput("forecast values must be finite"));
     }
     if !observed_values.iter().all(|v| v.is_finite()) {
-        return Err("crps: observed values must be finite");
+        return Err(ScoreError::InvalidInput("observed values must be finite"));
     }
     Ok(())
 }
@@ -66,18 +67,14 @@ pub fn brier_score(forecast_probs: &[f64], observed_outcomes: &[f64]) -> f64 {
 /// Checked Brier Score variant.
 ///
 /// Returns an error when:
-/// - input slices have different lengths
-/// - forecast probabilities are outside [0, 1] or non-finite
-/// - observed outcomes are not binary (0.0 or 1.0) or non-finite
+/// - input slices have different lengths ([`ScoreError::LengthMismatch`])
+/// - forecast probabilities are outside [0, 1] or non-finite ([`ScoreError::InvalidInput`])
+/// - observed outcomes are not binary (0.0 or 1.0) or non-finite ([`ScoreError::InvalidInput`])
 pub fn brier_score_checked(
     forecast_probs: &[f64],
     observed_outcomes: &[f64],
-) -> Result<f64, &'static str> {
-    ensure_equal_len(
-        forecast_probs.len(),
-        observed_outcomes.len(),
-        "brier_score",
-    )?;
+) -> Result<f64, ScoreError> {
+    ensure_equal_len(forecast_probs.len(), observed_outcomes.len())?;
     validate_brier_inputs(forecast_probs, observed_outcomes)?;
 
     if forecast_probs.is_empty() {
@@ -95,9 +92,12 @@ pub fn brier_score_checked(
 /// Continuous Ranked Probability Score (deterministic approximation).
 ///
 /// For deterministic forecasts, CRPS reduces to the mean absolute error.
-/// This implementation uses the deterministic approximation:
+/// This implementation is unclamped and suitable for any numeric domain
+/// (temperature in K, wind in m/s, etc.).
 ///
 /// CRPS ≈ (1/n) * sum(|forecast - observed|)
+///
+/// See also [`crps_normalized`] for a version that maps scores to [0, 1].
 ///
 /// Ported from `backend/server/services/forecast/forecast-verification-service.ts` lines 462–475.
 pub fn crps(forecast_values: &[f64], observed_values: &[f64]) -> f64 {
@@ -107,13 +107,13 @@ pub fn crps(forecast_values: &[f64], observed_values: &[f64]) -> f64 {
 /// Checked CRPS variant.
 ///
 /// Returns an error when:
-/// - input slices have different lengths
-/// - any forecast/observation value is non-finite
+/// - input slices have different lengths ([`ScoreError::LengthMismatch`])
+/// - any forecast/observation value is non-finite ([`ScoreError::InvalidInput`])
 pub fn crps_checked(
     forecast_values: &[f64],
     observed_values: &[f64],
-) -> Result<f64, &'static str> {
-    ensure_equal_len(forecast_values.len(), observed_values.len(), "crps")?;
+) -> Result<f64, ScoreError> {
+    ensure_equal_len(forecast_values.len(), observed_values.len())?;
     validate_crps_inputs(forecast_values, observed_values)?;
 
     if forecast_values.is_empty() {
@@ -127,9 +127,58 @@ pub fn crps_checked(
     Ok(sum / forecast_values.len() as f64)
 }
 
-/// Composite skill score from Brier and CRPS.
+/// Normalised CRPS: mean of `min(|forecast - observed| / threshold, 1.0)`.
 ///
-/// skill = ((1 - brier_score) + (1 - crps_score)) / 2
+/// Maps the unclamped MAE to [0, 1] by dividing each absolute error by `threshold`
+/// and clamping the result. Suitable for use with [`composite_skill`], which expects
+/// both inputs in [0, 1].
+///
+/// `threshold` must be finite and positive (e.g., the expected maximum error for the domain).
+pub fn crps_normalized(
+    forecast_values: &[f64],
+    observed_values: &[f64],
+    threshold: f64,
+) -> f64 {
+    crps_normalized_checked(forecast_values, observed_values, threshold)
+        .expect("crps_normalized preconditions violated")
+}
+
+/// Checked normalised CRPS variant.
+///
+/// Returns an error when:
+/// - input slices have different lengths ([`ScoreError::LengthMismatch`])
+/// - any forecast/observation value is non-finite ([`ScoreError::InvalidInput`])
+/// - `threshold` is not finite or not positive ([`ScoreError::InvalidInput`])
+pub fn crps_normalized_checked(
+    forecast_values: &[f64],
+    observed_values: &[f64],
+    threshold: f64,
+) -> Result<f64, ScoreError> {
+    ensure_equal_len(forecast_values.len(), observed_values.len())?;
+    validate_crps_inputs(forecast_values, observed_values)?;
+    if !threshold.is_finite() || threshold <= 0.0 {
+        return Err(ScoreError::InvalidInput(
+            "threshold must be finite and positive",
+        ));
+    }
+
+    if forecast_values.is_empty() {
+        return Ok(0.0);
+    }
+    let sum: f64 = forecast_values
+        .iter()
+        .zip(observed_values.iter())
+        .map(|(&f, &o)| ((f - o).abs() / threshold).min(1.0))
+        .sum();
+    Ok(sum / forecast_values.len() as f64)
+}
+
+/// Composite skill score from Brier and normalised CRPS.
+///
+/// skill = ((1 - brier_score) + (1 - crps_normalized)) / 2
+///
+/// Both inputs are expected to be in [0, 1]. Use [`crps_normalized`] (not [`crps`])
+/// to produce the CRPS argument.
 ///
 /// Ported from `backend/server/services/forecast/forecast-verification-service.ts` line 474.
 pub fn composite_skill(brier: f64, crps_val: f64) -> f64 {
@@ -139,6 +188,7 @@ pub fn composite_skill(brier: f64, crps_val: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ScoreError;
 
     #[test]
     fn brier_perfect() {
@@ -171,7 +221,7 @@ mod tests {
     #[test]
     fn brier_checked_rejects_length_mismatch() {
         let err = brier_score_checked(&[0.2, 0.4], &[0.0]).unwrap_err();
-        assert_eq!(err, "brier_score: input slices must have equal length");
+        assert_eq!(err, ScoreError::LengthMismatch { expected: 2, got: 1 });
     }
 
     #[test]
@@ -179,7 +229,31 @@ mod tests {
         let err = brier_score_checked(&[1.2], &[1.0]).unwrap_err();
         assert_eq!(
             err,
-            "brier_score: forecast probabilities must be finite and in [0, 1]"
+            ScoreError::InvalidInput(
+                "forecast probabilities must be finite and in [0, 1]"
+            )
+        );
+    }
+
+    #[test]
+    fn brier_checked_rejects_nan_probability() {
+        let err = brier_score_checked(&[f64::NAN], &[1.0]).unwrap_err();
+        assert_eq!(
+            err,
+            ScoreError::InvalidInput(
+                "forecast probabilities must be finite and in [0, 1]"
+            )
+        );
+    }
+
+    #[test]
+    fn brier_checked_rejects_negative_probability() {
+        let err = brier_score_checked(&[-0.1], &[0.0]).unwrap_err();
+        assert_eq!(
+            err,
+            ScoreError::InvalidInput(
+                "forecast probabilities must be finite and in [0, 1]"
+            )
         );
     }
 
@@ -188,7 +262,9 @@ mod tests {
         let err = brier_score_checked(&[0.2], &[0.3]).unwrap_err();
         assert_eq!(
             err,
-            "brier_score: observed outcomes must be finite 0.0 or 1.0 values"
+            ScoreError::InvalidInput(
+                "observed outcomes must be finite 0.0 or 1.0 values"
+            )
         );
     }
 
@@ -209,13 +285,67 @@ mod tests {
     #[test]
     fn crps_checked_rejects_length_mismatch() {
         let err = crps_checked(&[1.0, 2.0], &[1.0]).unwrap_err();
-        assert_eq!(err, "crps: input slices must have equal length");
+        assert_eq!(err, ScoreError::LengthMismatch { expected: 2, got: 1 });
     }
 
     #[test]
     fn crps_checked_rejects_non_finite_values() {
         let err = crps_checked(&[1.0, f64::NAN], &[1.0, 2.0]).unwrap_err();
-        assert_eq!(err, "crps: forecast values must be finite");
+        assert_eq!(
+            err,
+            ScoreError::InvalidInput("forecast values must be finite")
+        );
+    }
+
+    // ── crps_normalized ───────────────────────────────────────────────────────
+
+    #[test]
+    fn crps_normalized_basic() {
+        // error = 0.5, threshold = 1.0 → normalized = 0.5
+        let f = vec![1.5, 2.5];
+        let o = vec![1.0, 2.0];
+        assert!((crps_normalized(&f, &o, 1.0) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn crps_normalized_large_error_clamped() {
+        // error = 100.0, threshold = 1.0 → clamped to 1.0
+        let f = vec![100.0];
+        let o = vec![0.0];
+        assert_eq!(crps_normalized(&f, &o, 1.0), 1.0);
+    }
+
+    #[test]
+    fn crps_normalized_custom_threshold() {
+        // error = 5.0, threshold = 10.0 → 0.5
+        let f = vec![15.0];
+        let o = vec![10.0];
+        assert!((crps_normalized(&f, &o, 10.0) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn crps_normalized_empty() {
+        assert_eq!(crps_normalized(&[], &[], 1.0), 0.0);
+    }
+
+    #[test]
+    fn crps_normalized_checked_rejects_length_mismatch() {
+        let err = crps_normalized_checked(&[1.0, 2.0], &[1.0], 1.0).unwrap_err();
+        assert_eq!(err, ScoreError::LengthMismatch { expected: 2, got: 1 });
+    }
+
+    #[test]
+    fn crps_normalized_checked_rejects_bad_threshold() {
+        let err = crps_normalized_checked(&[1.0], &[1.0], -1.0).unwrap_err();
+        assert_eq!(
+            err,
+            ScoreError::InvalidInput("threshold must be finite and positive")
+        );
+        let err2 = crps_normalized_checked(&[1.0], &[1.0], f64::NAN).unwrap_err();
+        assert_eq!(
+            err2,
+            ScoreError::InvalidInput("threshold must be finite and positive")
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //!
 //! - **Continuous**: [`mae`], [`rmse`], [`bias`] — for temperature, wind speed, etc.
 //! - **Categorical**: [`pod`], [`far`], [`csi`], [`categorical_scores`] — for binary events (rain/no-rain)
-//! - **Probabilistic**: [`brier_score`], [`crps`] — for probability forecasts
+//! - **Probabilistic**: [`brier_score`], [`crps`], [`crps_normalized`] — for probability forecasts
 //! - **Composite**: [`ForecastAccuracyMetrics`], [`CategoricalScores`] — bundled results
 
 pub mod categorical;
@@ -19,7 +19,32 @@ use serde::{Deserialize, Serialize};
 // Re-export metric functions at crate root.
 pub use categorical::{categorical_scores, csi, far, pod, CategoricalScores};
 pub use continuous::{bias, mae, rmse};
-pub use probabilistic::{brier_score, brier_score_checked, crps, crps_checked};
+pub use probabilistic::{
+    brier_score, brier_score_checked, crps, crps_checked, crps_normalized,
+    crps_normalized_checked,
+};
+
+/// Errors returned by fallible scoring functions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScoreError {
+    /// Input slices have different lengths.
+    LengthMismatch { expected: usize, got: usize },
+    /// An input value is outside the valid domain.
+    InvalidInput(&'static str),
+}
+
+impl core::fmt::Display for ScoreError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ScoreError::LengthMismatch { expected, got } => {
+                write!(f, "length mismatch: expected {expected}, got {got}")
+            }
+            ScoreError::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ScoreError {}
 
 /// A forecast–observation pair.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -51,20 +76,26 @@ pub struct ForecastAccuracyMetrics {
 impl ForecastAccuracyMetrics {
     /// Compute all continuous metrics from a set of pairs, with a composite skill score.
     ///
-    /// `skill_score` uses a climatology-style reference RMSE:
-    /// `1.0 - (rmse / stddev(observations))`, clamped to [0, 1].
-    /// When all observations are identical, the reference denominator is zero and
-    /// skill is defined as 1.0 only when RMSE is also zero, otherwise 0.0.
+    /// The skill score is defined as `1.0 - (rmse / ref_rmse)`, clamped to `[0, 1]`,
+    /// where `ref_rmse` is the **population standard deviation of the observed values**
+    /// (equivalent to the RMSE of the climatological mean forecast).
+    ///
+    /// - A skill score of `1.0` means perfect forecasts (RMSE = 0).
+    /// - A skill score of `0.0` means the forecast is no better than climatology.
+    /// - Negative skill (RMSE > ref_rmse) is clamped to `0.0`.
+    ///
+    /// When all observations are identical (`ref_rmse = 0`), skill is `1.0` only
+    /// if RMSE is also zero, otherwise `0.0`.
     pub fn from_pairs(pairs: &[Pair]) -> Self {
         let mae_val = mae(pairs);
         let rmse_val = rmse(pairs);
         let bias_val = bias(pairs);
-        // Simple skill: 1 - normalized RMSE (using observation stddev as reference)
         let skill_score = if pairs.is_empty() {
             0.0
         } else {
             let mean_obs =
                 pairs.iter().map(|p| p.observed).sum::<f64>() / pairs.len() as f64;
+            // ref_rmse = population stddev of observations = RMSE of climatological mean
             let variance = pairs
                 .iter()
                 .map(|p| (p.observed - mean_obs).powi(2))
@@ -91,7 +122,7 @@ impl ForecastAccuracyMetrics {
     }
 
     /// Validate that all fields are finite and within expected ranges.
-    #[must_use]
+    #[must_use = "validation errors must be handled"]
     pub fn validate(&self) -> Result<(), &'static str> {
         if !self.mae.is_finite() || self.mae < 0.0 {
             return Err("mae must be finite and non-negative");
@@ -143,6 +174,25 @@ mod tests {
     fn from_pairs_identical_observations_nonzero_error() {
         let metrics = ForecastAccuracyMetrics::from_pairs(&pairs(&[(5.0, 5.0), (6.0, 5.0)]));
         assert_eq!(metrics.skill_score, 0.0);
+    }
+
+    /// All observations identical, forecast also identical → ref_rmse=0, RMSE=0 → skill=1.0.
+    #[test]
+    fn from_pairs_identical_obs_perfect_forecast() {
+        let metrics =
+            ForecastAccuracyMetrics::from_pairs(&pairs(&[(5.0, 5.0), (5.0, 5.0), (5.0, 5.0)]));
+        assert_eq!(metrics.rmse, 0.0);
+        assert_eq!(metrics.skill_score, 1.0);
+    }
+
+    /// Climatological mean forecast: RMSE = ref_rmse → skill = 0.
+    #[test]
+    fn from_pairs_skill_zero_climatology() {
+        // obs=[0.0, 1.0], mean=0.5, ref_rmse=0.5
+        // predict climatological mean 0.5 for both → RMSE=0.5, skill=0.0
+        let metrics = ForecastAccuracyMetrics::from_pairs(&pairs(&[(0.5, 0.0), (0.5, 1.0)]));
+        assert!((metrics.rmse - 0.5).abs() < 1e-12);
+        assert!((metrics.skill_score - 0.0).abs() < 1e-12);
     }
 
     #[test]
@@ -237,5 +287,13 @@ mod tests {
             skill_score: f64::INFINITY,
         };
         assert_eq!(metrics.validate(), Err("skill_score must be in [0, 1]"));
+    }
+
+    #[test]
+    fn score_error_display() {
+        let e = ScoreError::LengthMismatch { expected: 3, got: 2 };
+        assert_eq!(e.to_string(), "length mismatch: expected 3, got 2");
+        let e2 = ScoreError::InvalidInput("bad value");
+        assert_eq!(e2.to_string(), "invalid input: bad value");
     }
 }
