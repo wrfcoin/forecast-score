@@ -14,7 +14,7 @@ implementation (~750 LOC) into a dependency-free Rust crate.
 |----------|-----------|----------|
 | **Continuous** | `mae`, `rmse`, `bias` | Temperature, wind speed, pressure -- any numeric forecast |
 | **Categorical** | `pod`, `far`, `csi`, `categorical_scores` | Binary events: rain/no-rain, frost/no-frost |
-| **Probabilistic** | `brier_score`, `crps`, `brier_score_checked`, `crps_checked` | Probability forecasts, ensemble predictions |
+| **Probabilistic** | `brier_score`, `crps`, `crps_normalized`, `brier_score_checked`, `crps_checked`, `crps_normalized_checked` | Probability forecasts, ensemble predictions |
 | **Composite** | `ForecastAccuracyMetrics`, `CategoricalScores` | Bundled results for scoring pipelines |
 
 ## Quick start
@@ -141,11 +141,29 @@ for the full extraction plan and related crates (`meteo-types`, `wrf-primitives`
 
 Tracking issue: [wrfcoin/core4#544](https://github.com/wrfcoin/core4/issues/544)
 
+## Error handling
+
+Checked variants (`brier_score_checked`, `crps_checked`, `crps_normalized_checked`) return
+`Result<f64, ScoreError>` with structured errors instead of panicking:
+
+```rust
+use forecast_score::{brier_score_checked, ScoreError};
+
+match brier_score_checked(&[0.5, 0.8], &[1.0]) {
+    Err(ScoreError::LengthMismatch { expected, got }) => {
+        eprintln!("length mismatch: expected {expected}, got {got}");
+    }
+    Err(ScoreError::InvalidInput(msg)) => eprintln!("invalid input: {msg}"),
+    Ok(bs) => println!("Brier Score={bs:.3}"),
+}
+```
+
 ## Input contracts
 
-- `brier_score()` and `crps()` require equal-length slices and finite values.
+- `brier_score()` and `crps()` require equal-length slices and finite values; panics on violation.
 - `brier_score()` additionally requires probabilities in [0, 1] and binary outcomes (0.0 or 1.0).
-- If you want explicit error handling instead of panics, use `brier_score_checked()` and `crps_checked()`.
+- `crps_normalized()` additionally requires a positive finite `threshold`.
+- For explicit error handling instead of panics, use the `_checked` variants.
 
 ## License
 
