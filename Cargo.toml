@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Forecast verification metrics for meteorological and probabilistic predictions"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/wrfcoin/forecast-score"
 keywords = ["forecast", "verification", "meteorology", "scoring", "weather"]
 categories = ["science", "mathematics"]
 
