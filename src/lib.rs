@@ -26,6 +26,7 @@ pub use probabilistic::{
 
 /// Errors returned by fallible scoring functions.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ScoreError {
     /// Input slices have different lengths.
     LengthMismatch { expected: usize, got: usize },
