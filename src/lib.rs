@@ -10,9 +10,16 @@
 //! - **Probabilistic**: [`brier_score`], [`crps`], [`crps_normalized`] — for probability forecasts
 //! - **Composite**: [`ForecastAccuracyMetrics`], [`CategoricalScores`] — bundled results
 
+pub mod blockchain;
 pub mod categorical;
 pub mod continuous;
 pub mod probabilistic;
+
+// Re-export blockchain types at crate root.
+pub use blockchain::{
+    ForecastArtifactManifest, ForecastManifestValidationError, ForecastMetricsValidationError,
+    ForecastReceiptValidationError, ForecastVerificationReceipt,
+};
 
 use serde::{Deserialize, Serialize};
 
