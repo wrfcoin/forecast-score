@@ -303,8 +303,7 @@ impl ForecastVerificationReceipt {
         if self.verified_at <= 0 {
             return Err(ForecastReceiptValidationError::InvalidVerifiedAt);
         }
-        validate_metrics(&self.metrics)
-            .map_err(ForecastReceiptValidationError::InvalidMetrics)?;
+        validate_metrics(&self.metrics).map_err(ForecastReceiptValidationError::InvalidMetrics)?;
         Ok(())
     }
 }

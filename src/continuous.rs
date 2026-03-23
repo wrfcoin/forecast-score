@@ -90,8 +90,8 @@ mod tests {
         // One big error vs many small errors
         let big = pairs(&[(10.0, 0.0)]); // error = 10
         let small = pairs(&[(1.0, 0.0), (1.0, 0.0), (1.0, 0.0)]); // errors = 1,1,1
-        // MAE: big=10, small=1  |  RMSE: big=10, small=1
-        // But if we combine: one big + three small
+                                                                  // MAE: big=10, small=1  |  RMSE: big=10, small=1
+                                                                  // But if we combine: one big + three small
         let mixed = pairs(&[(10.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 0.0)]);
         let mixed_mae = mae(&mixed); // (10+1+1+1)/4 = 3.25
         let mixed_rmse = rmse(&mixed); // sqrt((100+1+1+1)/4) = sqrt(25.75) ≈ 5.07

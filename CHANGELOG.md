@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Anti-gaming scoring helpers: `ScoringConfig`, `AntiGamingScore`, lead-time validation, and baseline-aware scoring
+- Murphy-style Brier decomposition via `decompose_brier_score()` and `SkillComponents`
+- `brier_skill_score()` and `brier_skill_score_checked()` relative to climatology
+- Optional `meteo-types` feature with `score_weather_observations()` and `From<SensorReferencePair> for Pair`
+
 ## [0.1.0] - 2026-03-09
 
 ### Added
