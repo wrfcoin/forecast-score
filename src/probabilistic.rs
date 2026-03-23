@@ -89,6 +89,48 @@ pub fn brier_score_checked(
     Ok(sum / forecast_probs.len() as f64)
 }
 
+/// Brier Skill Score relative to a climatological event rate.
+///
+/// BSS = `1 - BS / BS_ref`, where `BS_ref` is the Brier score of always
+/// forecasting the climatological event frequency.
+pub fn brier_skill_score(
+    forecast_probs: &[f64],
+    observed_outcomes: &[f64],
+    climatology_rate: f64,
+) -> f64 {
+    brier_skill_score_checked(forecast_probs, observed_outcomes, climatology_rate)
+        .expect("brier_skill_score preconditions violated")
+}
+
+/// Checked Brier Skill Score variant.
+pub fn brier_skill_score_checked(
+    forecast_probs: &[f64],
+    observed_outcomes: &[f64],
+    climatology_rate: f64,
+) -> Result<f64, ScoreError> {
+    if !climatology_rate.is_finite() || !(0.0..=1.0).contains(&climatology_rate) {
+        return Err(ScoreError::InvalidInput(
+            "climatology_rate must be finite and in [0, 1]",
+        ));
+    }
+
+    let bs = brier_score_checked(forecast_probs, observed_outcomes)?;
+    if forecast_probs.is_empty() {
+        return Ok(0.0);
+    }
+
+    let climatology_probs = vec![climatology_rate; forecast_probs.len()];
+    let bs_ref = brier_score_checked(&climatology_probs, observed_outcomes)?;
+
+    if bs_ref > 0.0 {
+        Ok((1.0 - bs / bs_ref).clamp(0.0, 1.0))
+    } else if bs == 0.0 {
+        Ok(1.0)
+    } else {
+        Ok(0.0)
+    }
+}
+
 /// Continuous Ranked Probability Score (deterministic approximation).
 ///
 /// For deterministic forecasts, CRPS reduces to the mean absolute error.
@@ -109,10 +151,7 @@ pub fn crps(forecast_values: &[f64], observed_values: &[f64]) -> f64 {
 /// Returns an error when:
 /// - input slices have different lengths ([`ScoreError::LengthMismatch`])
 /// - any forecast/observation value is non-finite ([`ScoreError::InvalidInput`])
-pub fn crps_checked(
-    forecast_values: &[f64],
-    observed_values: &[f64],
-) -> Result<f64, ScoreError> {
+pub fn crps_checked(forecast_values: &[f64], observed_values: &[f64]) -> Result<f64, ScoreError> {
     ensure_equal_len(forecast_values.len(), observed_values.len())?;
     validate_crps_inputs(forecast_values, observed_values)?;
 
@@ -134,11 +173,7 @@ pub fn crps_checked(
 /// both inputs in [0, 1].
 ///
 /// `threshold` must be finite and positive (e.g., the expected maximum error for the domain).
-pub fn crps_normalized(
-    forecast_values: &[f64],
-    observed_values: &[f64],
-    threshold: f64,
-) -> f64 {
+pub fn crps_normalized(forecast_values: &[f64], observed_values: &[f64], threshold: f64) -> f64 {
     crps_normalized_checked(forecast_values, observed_values, threshold)
         .expect("crps_normalized preconditions violated")
 }
@@ -221,7 +256,13 @@ mod tests {
     #[test]
     fn brier_checked_rejects_length_mismatch() {
         let err = brier_score_checked(&[0.2, 0.4], &[0.0]).unwrap_err();
-        assert_eq!(err, ScoreError::LengthMismatch { expected: 2, got: 1 });
+        assert_eq!(
+            err,
+            ScoreError::LengthMismatch {
+                expected: 2,
+                got: 1
+            }
+        );
     }
 
     #[test]
@@ -229,9 +270,7 @@ mod tests {
         let err = brier_score_checked(&[1.2], &[1.0]).unwrap_err();
         assert_eq!(
             err,
-            ScoreError::InvalidInput(
-                "forecast probabilities must be finite and in [0, 1]"
-            )
+            ScoreError::InvalidInput("forecast probabilities must be finite and in [0, 1]")
         );
     }
 
@@ -240,9 +279,7 @@ mod tests {
         let err = brier_score_checked(&[f64::NAN], &[1.0]).unwrap_err();
         assert_eq!(
             err,
-            ScoreError::InvalidInput(
-                "forecast probabilities must be finite and in [0, 1]"
-            )
+            ScoreError::InvalidInput("forecast probabilities must be finite and in [0, 1]")
         );
     }
 
@@ -251,9 +288,7 @@ mod tests {
         let err = brier_score_checked(&[-0.1], &[0.0]).unwrap_err();
         assert_eq!(
             err,
-            ScoreError::InvalidInput(
-                "forecast probabilities must be finite and in [0, 1]"
-            )
+            ScoreError::InvalidInput("forecast probabilities must be finite and in [0, 1]")
         );
     }
 
@@ -262,9 +297,29 @@ mod tests {
         let err = brier_score_checked(&[0.2], &[0.3]).unwrap_err();
         assert_eq!(
             err,
-            ScoreError::InvalidInput(
-                "observed outcomes must be finite 0.0 or 1.0 values"
-            )
+            ScoreError::InvalidInput("observed outcomes must be finite 0.0 or 1.0 values")
+        );
+    }
+
+    #[test]
+    fn brier_skill_score_rewards_forecasts_beating_climatology() {
+        let result = brier_skill_score(&[0.9, 0.1, 0.8, 0.2], &[1.0, 0.0, 1.0, 0.0], 0.5);
+        assert!(result > 0.0);
+        assert!(result <= 1.0);
+    }
+
+    #[test]
+    fn brier_skill_score_is_zero_for_climatology_forecast() {
+        let result = brier_skill_score(&[0.5, 0.5, 0.5, 0.5], &[1.0, 0.0, 1.0, 0.0], 0.5);
+        assert!((result - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn brier_skill_score_checked_rejects_invalid_climatology_rate() {
+        let err = brier_skill_score_checked(&[0.5], &[1.0], 1.5).unwrap_err();
+        assert_eq!(
+            err,
+            ScoreError::InvalidInput("climatology_rate must be finite and in [0, 1]")
         );
     }
 
@@ -285,7 +340,13 @@ mod tests {
     #[test]
     fn crps_checked_rejects_length_mismatch() {
         let err = crps_checked(&[1.0, 2.0], &[1.0]).unwrap_err();
-        assert_eq!(err, ScoreError::LengthMismatch { expected: 2, got: 1 });
+        assert_eq!(
+            err,
+            ScoreError::LengthMismatch {
+                expected: 2,
+                got: 1
+            }
+        );
     }
 
     #[test]
@@ -331,7 +392,13 @@ mod tests {
     #[test]
     fn crps_normalized_checked_rejects_length_mismatch() {
         let err = crps_normalized_checked(&[1.0, 2.0], &[1.0], 1.0).unwrap_err();
-        assert_eq!(err, ScoreError::LengthMismatch { expected: 2, got: 1 });
+        assert_eq!(
+            err,
+            ScoreError::LengthMismatch {
+                expected: 2,
+                got: 1
+            }
+        );
     }
 
     #[test]

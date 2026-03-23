@@ -26,6 +26,13 @@ Add to your `Cargo.toml`:
 forecast-score = "0.1"
 ```
 
+Optional `meteo-types` integration stays off by default:
+
+```toml
+[dependencies]
+forecast-score = { version = "0.1", features = ["meteo-types"] }
+```
+
 ### Continuous metrics
 
 ```rust
@@ -101,6 +108,64 @@ println!("MAE={:.2}, RMSE={:.2}, Bias={:.2}, Skill={:.3}",
     metrics.mae, metrics.rmse, metrics.bias, metrics.skill_score);
 ```
 
+### Anti-gaming scoring
+
+```rust
+use forecast_score::{score_against_baselines, Pair, ScoringConfig};
+
+let forecast = vec![
+    Pair::new(20.0, 19.5),
+    Pair::new(21.0, 21.2),
+    Pair::new(19.8, 20.0),
+];
+let persistence = vec![19.5, 19.5, 21.2];
+let climatology = vec![18.0, 18.0, 18.0];
+
+let score = score_against_baselines(&forecast, &persistence, &climatology, &ScoringConfig {
+    min_sample_size: 3,
+    ..ScoringConfig::default()
+}).unwrap();
+
+assert!(score.effective_skill_score >= 0.0);
+```
+
+### Probabilistic diagnostics
+
+```rust
+use forecast_score::{brier_skill_score_checked, decompose_brier_score};
+
+let probs = vec![0.2, 0.8, 0.7, 0.1];
+let outcomes = vec![0.0, 1.0, 1.0, 0.0];
+
+let bss = brier_skill_score_checked(&probs, &outcomes, 0.5).unwrap();
+let components = decompose_brier_score(&probs, &outcomes, 10).unwrap();
+
+assert!(bss >= 0.0);
+assert!(components.sharpness >= 0.0);
+```
+
+### `meteo-types` weather scoring
+
+```rust
+#[cfg(feature = "meteo-types")]
+{
+    use forecast_score::score_weather_observations;
+    use meteo_types::WeatherObservation;
+
+    let forecast = vec![WeatherObservation {
+        temperature_c: Some(20.0),
+        ..WeatherObservation::default()
+    }];
+    let observed = vec![WeatherObservation {
+        temperature_c: Some(19.5),
+        ..WeatherObservation::default()
+    }];
+
+    let scores = score_weather_observations(&forecast, &observed).unwrap();
+    assert!(scores.temperature.is_some());
+}
+```
+
 ## Metric reference
 
 ### Continuous
@@ -162,8 +227,15 @@ match brier_score_checked(&[0.5, 0.8], &[1.0]) {
 
 - `brier_score()` and `crps()` require equal-length slices and finite values; panics on violation.
 - `brier_score()` additionally requires probabilities in [0, 1] and binary outcomes (0.0 or 1.0).
+- `brier_skill_score()` additionally requires a climatology rate in [0, 1].
 - `crps_normalized()` additionally requires a positive finite `threshold`.
 - For explicit error handling instead of panics, use the `_checked` variants.
+
+## Compatibility notes
+
+- `ForecastAccuracyMetrics` remains `mae`, `rmse`, `bias`, and `skill_score` only.
+- Anti-gaming helpers are additive APIs and do not change receipt or binding shapes.
+- The `meteo-types` dependency is feature-gated so the default build remains lightweight.
 
 ## License
 

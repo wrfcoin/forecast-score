@@ -10,10 +10,14 @@
 //! - **Probabilistic**: [`brier_score`], [`crps`], [`crps_normalized`] — for probability forecasts
 //! - **Composite**: [`ForecastAccuracyMetrics`], [`CategoricalScores`] — bundled results
 
+pub mod anti_gaming;
 pub mod blockchain;
 pub mod categorical;
 pub mod continuous;
 pub mod probabilistic;
+pub mod reliability;
+#[cfg(feature = "meteo-types")]
+pub mod weather_scoring;
 
 // Re-export blockchain types at crate root.
 pub use blockchain::{
@@ -24,12 +28,19 @@ pub use blockchain::{
 use serde::{Deserialize, Serialize};
 
 // Re-export metric functions at crate root.
+pub use anti_gaming::{
+    score_against_baselines, score_pairs_with_config, score_pairs_with_metadata,
+    validate_lead_time, AntiGamingScore, ScoringConfig,
+};
 pub use categorical::{categorical_scores, csi, far, pod, CategoricalScores};
 pub use continuous::{bias, mae, rmse};
 pub use probabilistic::{
-    brier_score, brier_score_checked, crps, crps_checked, crps_normalized,
-    crps_normalized_checked,
+    brier_score, brier_score_checked, brier_skill_score, brier_skill_score_checked, crps,
+    crps_checked, crps_normalized, crps_normalized_checked,
 };
+pub use reliability::{decompose_brier_score, SkillComponents};
+#[cfg(feature = "meteo-types")]
+pub use weather_scoring::{score_weather_observations, WeatherVariableScores};
 
 /// Errors returned by fallible scoring functions.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,8 +116,7 @@ impl ForecastAccuracyMetrics {
         let skill_score = if pairs.is_empty() {
             0.0
         } else {
-            let mean_obs =
-                pairs.iter().map(|p| p.observed).sum::<f64>() / pairs.len() as f64;
+            let mean_obs = pairs.iter().map(|p| p.observed).sum::<f64>() / pairs.len() as f64;
             // ref_rmse = population stddev of observations = RMSE of climatological mean
             let variance = pairs
                 .iter()
@@ -209,11 +219,8 @@ mod tests {
 
     #[test]
     fn from_pairs_mixed_errors() {
-        let metrics = ForecastAccuracyMetrics::from_pairs(&pairs(&[
-            (0.0, 0.0),
-            (1.0, 2.0),
-            (5.0, 4.0),
-        ]));
+        let metrics =
+            ForecastAccuracyMetrics::from_pairs(&pairs(&[(0.0, 0.0), (1.0, 2.0), (5.0, 4.0)]));
         assert!((metrics.mae - (2.0 / 3.0)).abs() < 1e-12);
         assert!((metrics.rmse - (2.0f64 / 3.0).sqrt()).abs() < 1e-12);
         assert_eq!(metrics.bias, 0.0);
@@ -303,7 +310,10 @@ mod tests {
 
     #[test]
     fn score_error_display() {
-        let e = ScoreError::LengthMismatch { expected: 3, got: 2 };
+        let e = ScoreError::LengthMismatch {
+            expected: 3,
+            got: 2,
+        };
         assert_eq!(e.to_string(), "length mismatch: expected 3, got 2");
         let e2 = ScoreError::InvalidInput("bad value");
         assert_eq!(e2.to_string(), "invalid input: bad value");
