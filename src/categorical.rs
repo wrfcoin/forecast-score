@@ -97,6 +97,119 @@ pub fn categorical_scores(pairs: &[Pair], threshold: f64) -> CategoricalScores {
     }
 }
 
+/// Heidke Skill Score (HSS).
+///
+/// Measures improvement over random chance. Unlike CSI, HSS accounts for
+/// correct negatives, making it well-suited for rare events (e.g., severe weather).
+///
+/// HSS = 2(H·CN − M·FA) / ((H+M)(M+CN) + (H+FA)(FA+CN))
+///
+/// Returns 0.0 when the denominator is zero (degenerate contingency table).
+pub fn hss(hits: u64, misses: u64, false_alarms: u64, correct_negatives: u64) -> f64 {
+    let h = hits as f64;
+    let m = misses as f64;
+    let fa = false_alarms as f64;
+    let cn = correct_negatives as f64;
+    let numer = 2.0 * (h * cn - m * fa);
+    let denom = (h + m) * (m + cn) + (h + fa) * (fa + cn);
+    if denom == 0.0 {
+        return 0.0;
+    }
+    numer / denom
+}
+
+/// Equitable Threat Score (Gilbert Skill Score / ETS).
+///
+/// Like CSI but corrected for hits expected by chance. Widely used by NCEP
+/// for precipitation verification.
+///
+/// hits_random = (hits + misses)(hits + false_alarms) / n
+/// ETS = (hits − hits_random) / (hits + misses + false_alarms − hits_random)
+///
+/// Returns 0.0 when the denominator is zero.
+pub fn ets(hits: u64, misses: u64, false_alarms: u64, correct_negatives: u64) -> f64 {
+    let n = (hits + misses + false_alarms + correct_negatives) as f64;
+    if n == 0.0 {
+        return 0.0;
+    }
+    let h = hits as f64;
+    let m = misses as f64;
+    let fa = false_alarms as f64;
+    let hits_random = (h + m) * (h + fa) / n;
+    let denom = h + m + fa - hits_random;
+    if denom.abs() < f64::EPSILON {
+        return 0.0;
+    }
+    (h - hits_random) / denom
+}
+
+/// Frequency Bias.
+///
+/// Ratio of forecast frequency to observed frequency.
+/// Bias > 1 → overforecasting; Bias < 1 → underforecasting; 1.0 = unbiased.
+///
+/// Returns 1.0 when there are no observed events (bias undefined).
+pub fn frequency_bias(hits: u64, misses: u64, false_alarms: u64) -> f64 {
+    let observed_freq = (hits + misses) as f64;
+    if observed_freq == 0.0 {
+        return 1.0;
+    }
+    (hits + false_alarms) as f64 / observed_freq
+}
+
+/// One point on a ROC curve: (false positive rate, true positive rate) at a threshold.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RocPoint {
+    pub threshold: f64,
+    pub false_positive_rate: f64,
+    pub true_positive_rate: f64,
+}
+
+/// Compute a ROC curve by sweeping across `thresholds` for `pairs`.
+///
+/// Returns one `RocPoint` per threshold, sorted by ascending false_positive_rate.
+/// Use `auc_from_roc` to compute the area under the resulting curve.
+pub fn roc_curve(pairs: &[Pair], mut thresholds: Vec<f64>) -> Vec<RocPoint> {
+    thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut points: Vec<RocPoint> = thresholds
+        .into_iter()
+        .map(|t| {
+            let scores = categorical_scores(pairs, t);
+            let tpr = pod(scores.hits, scores.misses);
+            let total_neg = scores.false_alarms + scores.correct_negatives;
+            let fpr = if total_neg == 0 {
+                0.0
+            } else {
+                scores.false_alarms as f64 / total_neg as f64
+            };
+            RocPoint { threshold: t, false_positive_rate: fpr, true_positive_rate: tpr }
+        })
+        .collect();
+    points.sort_by(|a, b| {
+        a.false_positive_rate
+            .partial_cmp(&b.false_positive_rate)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    points
+}
+
+/// Compute the Area Under the ROC Curve (AUC) via the trapezoidal rule.
+///
+/// Expects points sorted by ascending false_positive_rate (as returned by `roc_curve`).
+/// Returns a value in [0, 1]; 0.5 = no skill, 1.0 = perfect discrimination.
+pub fn auc_from_roc(points: &[RocPoint]) -> f64 {
+    if points.len() < 2 {
+        return 0.0;
+    }
+    let mut area = 0.0;
+    for window in points.windows(2) {
+        let dx = window[1].false_positive_rate - window[0].false_positive_rate;
+        let avg_y = (window[0].true_positive_rate + window[1].true_positive_rate) / 2.0;
+        area += dx * avg_y;
+    }
+    area.abs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +256,81 @@ mod tests {
         assert!((scores.pod - 0.5).abs() < 1e-10);
         assert!((scores.far - 0.5).abs() < 1e-10);
         assert!((scores.csi - 1.0 / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn hss_perfect() {
+        // perfect forecast: all hits and correct negatives, zero misses/false_alarms
+        let score = hss(10, 0, 0, 10);
+        assert!((score - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn hss_no_skill() {
+        // random-chance level — numerator zero when H·CN == M·FA
+        // 2*2 == 2*2 → HSS = 0
+        let score = hss(2, 2, 2, 2);
+        assert!((score).abs() < 1e-10);
+    }
+
+    #[test]
+    fn hss_degenerate() {
+        assert_eq!(hss(0, 0, 0, 0), 0.0);
+    }
+
+    #[test]
+    fn ets_perfect() {
+        // h=10,m=0,fa=0,cn=10: hits_random = 10*10/20 = 5; ETS = (10-5)/(10+0+0-5)=1
+        let score = ets(10, 0, 0, 10);
+        assert!((score - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ets_degenerate() {
+        assert_eq!(ets(0, 0, 0, 0), 0.0);
+    }
+
+    #[test]
+    fn frequency_bias_unbiased() {
+        // 5 hits, 5 misses, 5 false alarms → bias = 10/10 = 1
+        assert!((frequency_bias(5, 5, 5) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn frequency_bias_overforecast() {
+        // 5 hits, 0 misses, 5 false alarms → bias = 10/5 = 2
+        assert!((frequency_bias(5, 0, 5) - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn roc_and_auc_perfect() {
+        // Perfect binary classifier: all positives score 1.0, all negatives 0.0
+        let pairs: Vec<Pair> = (0..5).map(|_| Pair::new(1.0, 1.0))
+            .chain((0..5).map(|_| Pair::new(0.0, 0.0)))
+            .collect();
+        let thresholds = vec![0.5];
+        let curve = roc_curve(&pairs, thresholds);
+        assert_eq!(curve.len(), 1);
+        assert!((curve[0].true_positive_rate - 1.0).abs() < 1e-10);
+        assert!((curve[0].false_positive_rate - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn auc_from_roc_unit_square() {
+        // Perfect ROC passes through (0,1): AUC should be 1.0 with anchor points
+        let points = vec![
+            RocPoint { threshold: 1.0, false_positive_rate: 0.0, true_positive_rate: 0.0 },
+            RocPoint { threshold: 0.5, false_positive_rate: 0.0, true_positive_rate: 1.0 },
+            RocPoint { threshold: 0.0, false_positive_rate: 1.0, true_positive_rate: 1.0 },
+        ];
+        let auc = auc_from_roc(&points);
+        assert!((auc - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn auc_empty() {
+        assert_eq!(auc_from_roc(&[]), 0.0);
+        let single = vec![RocPoint { threshold: 0.5, false_positive_rate: 0.5, true_positive_rate: 0.5 }];
+        assert_eq!(auc_from_roc(&single), 0.0);
     }
 }
