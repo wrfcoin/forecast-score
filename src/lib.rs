@@ -88,6 +88,39 @@ impl Pair {
     }
 }
 
+/// Reference forecast strategies for skill score computation.
+///
+/// Controls how `from_pairs_with_reference` selects the baseline RMSE that
+/// represents "no skill". A skill score of 0 means the forecast performs as
+/// well as this baseline; 1 means perfect.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ReferenceStrategy {
+    /// Population standard deviation of observations in the sample (same as
+    /// `from_pairs()`). Works well for large heterogeneous datasets; can be
+    /// gamed by submitting during low-variability windows.
+    SampleStdDev,
+    /// Caller-supplied climatological RMSE (e.g., computed from years of
+    /// history for this location and time-of-year). Prevents gaming via
+    /// homogeneous short windows.
+    FixedClimatology { reference_rmse: f64 },
+    /// Persistence baseline: previous observation as forecast. Skill > 0
+    /// means the model beats "do nothing". Falls back to 0 skill when fewer
+    /// than two observations are available.
+    Persistence,
+}
+
+/// RMSE of the persistence forecast over a time-ordered observation series.
+///
+/// `error[i] = observed[i] - observed[i-1]` for i ≥ 1.
+/// Returns 0.0 when fewer than two observations are supplied.
+pub fn persistence_rmse(observations: &[f64]) -> f64 {
+    if observations.len() < 2 {
+        return 0.0;
+    }
+    let sse: f64 = observations.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
+    (sse / (observations.len() - 1) as f64).sqrt()
+}
+
 /// Accuracy metrics from forecast verification.
 ///
 /// Compatible with `ForecastAccuracyMetrics` in WRFCoin's shared-protocol.
@@ -146,6 +179,46 @@ impl ForecastAccuracyMetrics {
             bias: bias_val,
             skill_score,
         }
+    }
+
+    /// Compute metrics against a chosen reference baseline.
+    ///
+    /// All continuous metrics (MAE, RMSE, bias) are the same as `from_pairs()`.
+    /// Only `skill_score` changes: `1.0 − (rmse / reference_rmse)`, clamped to
+    /// `[0, 1]`. See [`ReferenceStrategy`] for baseline options.
+    pub fn from_pairs_with_reference(pairs: &[Pair], reference: ReferenceStrategy) -> Self {
+        let mae_val = mae(pairs);
+        let rmse_val = rmse(pairs);
+        let bias_val = bias(pairs);
+        let skill_score = if pairs.is_empty() {
+            0.0
+        } else {
+            let ref_rmse = match reference {
+                ReferenceStrategy::SampleStdDev => {
+                    let n = pairs.len() as f64;
+                    let mean_obs = pairs.iter().map(|p| p.observed).sum::<f64>() / n;
+                    let var = pairs
+                        .iter()
+                        .map(|p| (p.observed - mean_obs).powi(2))
+                        .sum::<f64>()
+                        / n;
+                    var.sqrt()
+                }
+                ReferenceStrategy::FixedClimatology { reference_rmse } => reference_rmse,
+                ReferenceStrategy::Persistence => {
+                    let obs: Vec<f64> = pairs.iter().map(|p| p.observed).collect();
+                    persistence_rmse(&obs)
+                }
+            };
+            if ref_rmse > 0.0 {
+                (1.0 - rmse_val / ref_rmse).clamp(0.0, 1.0)
+            } else if rmse_val == 0.0 {
+                1.0
+            } else {
+                0.0
+            }
+        };
+        Self { mae: mae_val, rmse: rmse_val, bias: bias_val, skill_score }
     }
 
     /// Validate that all fields are finite and within expected ranges.
@@ -322,5 +395,106 @@ mod tests {
         assert_eq!(e.to_string(), "length mismatch: expected 3, got 2");
         let e2 = ScoreError::InvalidInput("bad value");
         assert_eq!(e2.to_string(), "invalid input: bad value");
+    }
+
+    // --- ReferenceStrategy / persistence_rmse ---
+
+    #[test]
+    fn sample_stddev_matches_from_pairs() {
+        let data = pairs(&[(1.0, 0.0), (2.0, 1.0), (3.0, 3.0)]);
+        let a = ForecastAccuracyMetrics::from_pairs(&data);
+        let b = ForecastAccuracyMetrics::from_pairs_with_reference(
+            &data,
+            ReferenceStrategy::SampleStdDev,
+        );
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fixed_climatology_uses_supplied_rmse() {
+        // obs=[0, 1], forecast=[0.5, 0.5] → RMSE=0.5
+        // with ref_rmse=1.0: skill = 1 - 0.5/1.0 = 0.5
+        let data = pairs(&[(0.5, 0.0), (0.5, 1.0)]);
+        let m = ForecastAccuracyMetrics::from_pairs_with_reference(
+            &data,
+            ReferenceStrategy::FixedClimatology { reference_rmse: 1.0 },
+        );
+        assert!((m.skill_score - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fixed_climatology_perfect_forecast_skill_one() {
+        let data = pairs(&[(1.0, 1.0), (2.0, 2.0)]);
+        let m = ForecastAccuracyMetrics::from_pairs_with_reference(
+            &data,
+            ReferenceStrategy::FixedClimatology { reference_rmse: 2.0 },
+        );
+        assert_eq!(m.skill_score, 1.0);
+    }
+
+    #[test]
+    fn persistence_skill_beats_persistence() {
+        // obs=[10, 11, 12, 13] — perfect linear trend
+        // persistence RMSE = 1.0 (each step differs by 1)
+        // perfect forecast: RMSE = 0 → skill = 1.0
+        let data: Vec<Pair> = [10.0_f64, 11.0, 12.0, 13.0]
+            .iter()
+            .map(|&o| Pair::new(o, o))
+            .collect();
+        let m = ForecastAccuracyMetrics::from_pairs_with_reference(
+            &data,
+            ReferenceStrategy::Persistence,
+        );
+        assert_eq!(m.skill_score, 1.0);
+    }
+
+    #[test]
+    fn persistence_skill_is_zero_at_baseline() {
+        // obs=[10, 11, 12, 13]: each step +1 → persistence_rmse = 1.0
+        // Pairs are exactly the persistence forecast (predicted = prev obs):
+        //   t1: (10→11), t2: (11→12), t3: (12→13) → RMSE = 1.0
+        // skill = 1 - 1.0/1.0 = 0.0
+        let data = vec![
+            Pair::new(10.0, 11.0),
+            Pair::new(11.0, 12.0),
+            Pair::new(12.0, 13.0),
+        ];
+        let m = ForecastAccuracyMetrics::from_pairs_with_reference(
+            &data,
+            ReferenceStrategy::Persistence,
+        );
+        // ref = persistence_rmse of observations [11,12,13] extracted from pairs
+        // persistence_rmse([11,12,13]) = sqrt((1+1)/2) = 1.0
+        // forecast RMSE = sqrt((1+1+1)/3) = 1.0 → skill = 0.0
+        assert!((m.skill_score).abs() < 1e-10);
+    }
+
+    #[test]
+    fn persistence_rmse_basic() {
+        // [10, 11, 12, 13]: each diff = 1 → RMSE = 1.0
+        assert!((persistence_rmse(&[10.0, 11.0, 12.0, 13.0]) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn persistence_rmse_single_returns_zero() {
+        assert_eq!(persistence_rmse(&[5.0]), 0.0);
+        assert_eq!(persistence_rmse(&[]), 0.0);
+    }
+
+    #[test]
+    fn persistence_rmse_two_points() {
+        // diff = 3.0 → RMSE = 3.0
+        assert!((persistence_rmse(&[0.0, 3.0]) - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn skill_clamped_to_zero_when_rmse_exceeds_reference() {
+        // forecast RMSE > reference_rmse → raw skill < 0 → clamped to 0
+        let data = pairs(&[(0.0, 10.0), (0.0, 10.0)]); // RMSE = 10
+        let m = ForecastAccuracyMetrics::from_pairs_with_reference(
+            &data,
+            ReferenceStrategy::FixedClimatology { reference_rmse: 1.0 },
+        );
+        assert_eq!(m.skill_score, 0.0);
     }
 }
