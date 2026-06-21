@@ -32,13 +32,18 @@ pub use anti_gaming::{
     score_against_baselines, score_pairs_with_config, score_pairs_with_metadata,
     validate_lead_time, AntiGamingScore, ScoringConfig,
 };
-pub use categorical::{categorical_scores, csi, far, pod, CategoricalScores};
+pub use categorical::{
+    auc_from_roc, categorical_scores, csi, ets, far, frequency_bias, hss, pod, roc_curve,
+    CategoricalScores, RocPoint,
+};
 pub use continuous::{bias, mae, rmse};
 pub use probabilistic::{
     brier_score, brier_score_checked, brier_skill_score, brier_skill_score_checked, crps,
     crps_checked, crps_normalized, crps_normalized_checked,
 };
-pub use reliability::{decompose_brier_score, SkillComponents};
+pub use reliability::{
+    brier_decomposition, decompose_brier_score, BrierDecomposition, ReliabilityBin, SkillComponents,
+};
 #[cfg(feature = "meteo-types")]
 pub use weather_scoring::{score_weather_observations, WeatherVariableScores};
 
