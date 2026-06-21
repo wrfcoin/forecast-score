@@ -41,7 +41,9 @@ pub use probabilistic::{
     brier_score, brier_score_checked, brier_skill_score, brier_skill_score_checked, crps,
     crps_checked, crps_normalized, crps_normalized_checked,
 };
-pub use reliability::{decompose_brier_score, SkillComponents};
+pub use reliability::{
+    brier_decomposition, decompose_brier_score, BrierDecomposition, ReliabilityBin, SkillComponents,
+};
 #[cfg(feature = "meteo-types")]
 pub use weather_scoring::{score_weather_observations, WeatherVariableScores};
 
