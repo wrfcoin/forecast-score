@@ -14,6 +14,7 @@ pub mod anti_gaming;
 pub mod blockchain;
 pub mod categorical;
 pub mod continuous;
+pub mod ensemble;
 pub mod probabilistic;
 pub mod reliability;
 #[cfg(feature = "meteo-types")]
@@ -38,6 +39,7 @@ pub use probabilistic::{
     brier_score, brier_score_checked, brier_skill_score, brier_skill_score_checked, crps,
     crps_checked, crps_normalized, crps_normalized_checked,
 };
+pub use ensemble::{crps_ensemble, rank_histogram, spread_skill_ratio, EnsembleForecast};
 pub use reliability::{decompose_brier_score, SkillComponents};
 #[cfg(feature = "meteo-types")]
 pub use weather_scoring::{score_weather_observations, WeatherVariableScores};
