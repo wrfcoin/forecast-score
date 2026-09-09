@@ -13,10 +13,52 @@ use super::ForecastAccuracyMetrics;
 
 /// Version tag embedded in every canonical signing message.
 const SIGNING_SCHEME_VERSION: &str = "wrfcoin-sign-v1";
-/// Default chain identifier used in signing messages.
-const DEFAULT_CHAIN_ID: &str = "wrfcoin-main";
-/// Default network identifier used in signing messages.
-const DEFAULT_NETWORK_ID: &str = "mainnet";
+/// Explicit domain binding shared by receipt signing and verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainBinding {
+    chain_id: std::borrow::Cow<'static, str>,
+    network_id: std::borrow::Cow<'static, str>,
+}
+
+/// Missing or empty signing-domain configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{variable} must be set to a non-empty UTF-8 value")]
+pub struct ChainBindingError {
+    /// Configuration variable that must be supplied.
+    pub variable: &'static str,
+}
+
+impl ChainBinding {
+    /// Explicit legacy mainnet binding; never selected by `from_env`.
+    pub const MAINNET: Self = Self {
+        chain_id: std::borrow::Cow::Borrowed("wrfcoin-main"),
+        network_id: std::borrow::Cow::Borrowed("mainnet"),
+    };
+
+    /// Validate a caller-supplied chain and network, without defaults.
+    pub fn new(chain_id: impl Into<String>, network_id: impl Into<String>) -> Result<Self, ChainBindingError> {
+        let chain_id = chain_id.into();
+        let network_id = network_id.into();
+        for (variable, value) in [("WRFCOIN_CHAIN_ID", &chain_id), ("WRFCOIN_NETWORK_ID", &network_id)] {
+            if value.trim().is_empty() {
+                return Err(ChainBindingError { variable });
+            }
+        }
+        Ok(Self { chain_id: chain_id.into(), network_id: network_id.into() })
+    }
+
+    /// Read both required variables once; unset, non-UTF-8 and empty values fail closed.
+    pub fn from_env() -> Result<Self, ChainBindingError> {
+        let read = |variable| std::env::var(variable).map_err(|_| ChainBindingError { variable });
+        Self::new(read("WRFCOIN_CHAIN_ID")?, read("WRFCOIN_NETWORK_ID")?)
+    }
+
+    /// Chain identifier used in canonical messages.
+    pub fn chain_id(&self) -> &str { &self.chain_id }
+
+    /// Network identifier used in canonical messages.
+    pub fn network_id(&self) -> &str { &self.network_id }
+}
 
 // ---------------------------------------------------------------------------
 // ForecastArtifactManifest
@@ -234,7 +276,7 @@ impl ForecastVerificationReceipt {
         payload_digest_hex(self)
     }
 
-    fn canonical_signing_message(&self) -> String {
+    fn canonical_signing_message(&self, binding: &ChainBinding) -> String {
         #[derive(Serialize)]
         struct SigningPayload<'a> {
             manifest_digest: &'a str,
@@ -254,6 +296,7 @@ impl ForecastVerificationReceipt {
             nonce: &self.nonce,
         });
         build_canonical_signing_message(
+            binding,
             DomainSigningAction::ForecastVerification,
             &self.oracle_id,
             self.verified_at,
@@ -262,13 +305,25 @@ impl ForecastVerificationReceipt {
         )
     }
 
-    /// Builds the canonical signing message for the receipt.
+    /// Legacy mainnet-only message. Use an explicit binding for new callers.
+    #[deprecated(note = "mainnet-only; use signing_message_with with an explicit ChainBinding")]
     pub fn signing_message(&self) -> String {
-        self.canonical_signing_message()
+        self.signing_message_with(&ChainBinding::MAINNET)
     }
 
-    /// Verifies the signature against the receipt `oracle_id` public key.
+    /// Builds the canonical message under the supplied chain and network binding.
+    pub fn signing_message_with(&self, binding: &ChainBinding) -> String {
+        self.canonical_signing_message(binding)
+    }
+
+    /// Legacy mainnet-only verification. Use an explicit binding for new callers.
+    #[deprecated(note = "mainnet-only; use has_valid_signature_with with an explicit ChainBinding")]
     pub fn has_valid_signature(&self) -> bool {
+        self.has_valid_signature_with(&ChainBinding::MAINNET)
+    }
+
+    /// Verifies the signature against `oracle_id` under the supplied binding.
+    pub fn has_valid_signature_with(&self, binding: &ChainBinding) -> bool {
         let Some(signature_hex) = self.signature.as_deref() else {
             return false;
         };
@@ -285,7 +340,7 @@ impl ForecastVerificationReceipt {
             return false;
         };
         public_key
-            .verify(self.signing_message().as_bytes(), &signature)
+            .verify(self.signing_message_with(binding).as_bytes(), &signature)
             .is_ok()
     }
 
@@ -366,6 +421,7 @@ fn payload_digest_hex<T: Serialize>(payload: &T) -> String {
 
 /// Builds a canonical signing message from the given components.
 fn build_canonical_signing_message(
+    binding: &ChainBinding,
     action: DomainSigningAction,
     signer_id: &str,
     timestamp: i64,
@@ -376,8 +432,8 @@ fn build_canonical_signing_message(
         "{}|{}|{}|{}|{}|{}|{}|{}",
         SIGNING_SCHEME_VERSION,
         action.domain(),
-        DEFAULT_CHAIN_ID,
-        DEFAULT_NETWORK_ID,
+        binding.chain_id(),
+        binding.network_id(),
         signer_id,
         timestamp,
         nonce.unwrap_or(""),
@@ -430,6 +486,47 @@ mod tests {
             rmse: 2.0,
             bias: -0.3,
             skill_score: 0.85,
+        }
+    }
+
+    #[test]
+    fn chain_binding_rejects_empty_fields() {
+        for empty in ["", " ", "\t\n"] {
+            assert_eq!(ChainBinding::new(empty, "testnet").unwrap_err().variable, "WRFCOIN_CHAIN_ID");
+            assert_eq!(ChainBinding::new("777", empty).unwrap_err().variable, "WRFCOIN_NETWORK_ID");
+        }
+    }
+
+    // Separate processes avoid mutating the environment of parallel signing tests.
+    #[test]
+    fn chain_binding_environment_is_required() {
+        if let Ok(expected) = std::env::var("FORECAST_SCORE_BINDING_TEST") {
+            let result = ChainBinding::from_env();
+            if expected.starts_with("WRFCOIN_") {
+                assert_eq!(result.unwrap_err().to_string(), format!("{expected} must be set to a non-empty UTF-8 value"));
+            } else {
+                let binding = result.unwrap();
+                assert_eq!(binding.chain_id(), expected);
+                assert_eq!(binding.network_id(), if expected == "777" { "testnet" } else { "mainnet" });
+            }
+            return;
+        }
+        for (chain, network, expected) in [
+            (None, None, "WRFCOIN_CHAIN_ID"),
+            (Some("777"), None, "WRFCOIN_NETWORK_ID"),
+            (Some(""), Some("testnet"), "WRFCOIN_CHAIN_ID"),
+            (Some("777"), Some(""), "WRFCOIN_NETWORK_ID"),
+            (Some("777"), Some("testnet"), "777"),
+            (Some("wrfcoin-main"), Some("mainnet"), "wrfcoin-main"),
+        ] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.args(["--exact", "blockchain::tests::chain_binding_environment_is_required", "--nocapture"])
+                .env_remove("WRFCOIN_CHAIN_ID").env_remove("WRFCOIN_NETWORK_ID")
+                .env("FORECAST_SCORE_BINDING_TEST", expected);
+            if let Some(value) = chain { child.env("WRFCOIN_CHAIN_ID", value); }
+            if let Some(value) = network { child.env("WRFCOIN_NETWORK_ID", value); }
+            let output = child.output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
         }
     }
 
@@ -741,11 +838,21 @@ mod tests {
             signature: None,
         };
 
-        let signature = signing_key.sign(receipt.signing_message().as_bytes());
+        let binding = ChainBinding::new("777", "testnet").unwrap();
+        let mainnet = ChainBinding::new("wrfcoin-main", "mainnet").unwrap();
+        assert_eq!(mainnet, ChainBinding::MAINNET);
+        assert_ne!(receipt.signing_message_with(&binding), receipt.signing_message_with(&mainnet));
+        assert!(receipt.signing_message_with(&binding).contains("|777|testnet|"));
+        let signature = signing_key.sign(receipt.signing_message_with(&binding).as_bytes());
         receipt.signature = Some(hex::encode(signature.to_bytes()));
 
         assert_eq!(receipt.receipt_digest().len(), 64);
-        assert!(receipt.has_valid_signature());
+        assert!(receipt.has_valid_signature_with(&binding));
+        assert!(!receipt.has_valid_signature_with(&mainnet));
+        assert!(!receipt.has_valid_signature_with(&ChainBinding::new("777", "other").unwrap()));
+        receipt.signature = Some(hex::encode(signing_key.sign(receipt.signing_message_with(&mainnet).as_bytes()).to_bytes()));
+        assert!(receipt.has_valid_signature_with(&mainnet));
+        assert!(!receipt.has_valid_signature_with(&binding));
     }
 
     #[test]
@@ -760,7 +867,7 @@ mod tests {
             zk_proof: None,
             signature: None,
         };
-        assert!(!receipt.has_valid_signature());
+        assert!(!receipt.has_valid_signature_with(&ChainBinding::MAINNET));
     }
 
     #[test]
@@ -775,6 +882,6 @@ mod tests {
             zk_proof: None,
             signature: Some("ab".repeat(64)),
         };
-        assert!(!receipt.has_valid_signature());
+        assert!(!receipt.has_valid_signature_with(&ChainBinding::MAINNET));
     }
 }

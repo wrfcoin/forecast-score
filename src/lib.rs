@@ -22,6 +22,7 @@ pub mod weather_scoring;
 
 // Re-export blockchain types at crate root.
 pub use blockchain::{
+    ChainBinding, ChainBindingError,
     ForecastArtifactManifest, ForecastManifestValidationError, ForecastMetricsValidationError,
     ForecastReceiptValidationError, ForecastVerificationReceipt,
 };
