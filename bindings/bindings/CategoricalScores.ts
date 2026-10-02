@@ -3,4 +3,8 @@
 /**
  * Bundle of categorical scores for a single threshold.
  */
-export type CategoricalScores = { threshold: number, hits: bigint, misses: bigint, false_alarms: bigint, correct_negatives: bigint, pod: number, far: number, csi: number, };
+export type CategoricalScores = { threshold: number, hits: bigint, misses: bigint, false_alarms: bigint, correct_negatives: bigint, pod: number, far: number, csi: number, 
+/**
+ * Defaults permit reading historical JSON; zero means unavailable there.
+ */
+hss: number, ets: number, frequency_bias: number, };
