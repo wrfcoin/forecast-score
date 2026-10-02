@@ -72,9 +72,8 @@ fn require_sample_size(len: usize, cfg: &ScoringConfig) -> Result<(), ScoreError
 fn skill_from_reference(forecast_rmse: f64, reference_rmse: f64) -> f64 {
     if reference_rmse > 0.0 {
         (1.0 - forecast_rmse / reference_rmse).clamp(0.0, 1.0)
-    } else if forecast_rmse == 0.0 {
-        1.0
     } else {
+        // A perfect baseline cannot be beaten; even a perfect forecast is a tie.
         0.0
     }
 }
@@ -129,6 +128,10 @@ pub fn score_pairs_with_metadata(
 }
 
 /// Score a forecast against persistence and climatological baselines.
+///
+/// Effective skill measures improvement over the better baseline. A zero-error
+/// baseline gives zero effective skill, including a perfect forecast tie. The
+/// legacy diagnostic metrics retain their sample-relative skill definition.
 pub fn score_against_baselines(
     forecast: &[Pair],
     persistence: &[f64],
