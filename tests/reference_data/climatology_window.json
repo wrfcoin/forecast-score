@@ -1,0 +1,8 @@
+{
+  "source": "Ebert 2007 ECMWF verification workshop, slide 9, first five 24h probability/outcome pairs",
+  "url": "https://www.ecmwf.int/sites/default/files/elibrary/2007/15489-verification-probability-forecasts.pdf",
+  "pairs": [[0.3,0],[0.1,0],[0.1,0],[0.2,0],[0.2,0]],
+  "reference_note": "Independent RMSE 0.5 is an analytic test comparator, not an estimated Tampere climate",
+  "reference_rmse": 0.5,
+  "expected_skill": 0.6101282262076414
+}

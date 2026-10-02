@@ -16,15 +16,15 @@ pub mod categorical;
 pub mod continuous;
 pub mod ensemble;
 pub mod probabilistic;
+pub mod reference;
 pub mod reliability;
 #[cfg(feature = "meteo-types")]
 pub mod weather_scoring;
 
 // Re-export blockchain types at crate root.
 pub use blockchain::{
-    ChainBinding, ChainBindingError,
-    ForecastArtifactManifest, ForecastManifestValidationError, ForecastMetricsValidationError,
-    ForecastReceiptValidationError, ForecastVerificationReceipt,
+    ChainBinding, ChainBindingError, ForecastArtifactManifest, ForecastManifestValidationError,
+    ForecastMetricsValidationError, ForecastReceiptValidationError, ForecastVerificationReceipt,
 };
 
 use serde::{Deserialize, Serialize};
@@ -39,11 +39,12 @@ pub use categorical::{
     CategoricalScores, RocPoint,
 };
 pub use continuous::{bias, mae, rmse};
+pub use ensemble::{crps_ensemble, rank_histogram, spread_skill_ratio, EnsembleForecast};
 pub use probabilistic::{
     brier_score, brier_score_checked, brier_skill_score, brier_skill_score_checked, crps,
     crps_checked, crps_normalized, crps_normalized_checked,
 };
-pub use ensemble::{crps_ensemble, rank_histogram, spread_skill_ratio, EnsembleForecast};
+pub use reference::persistence_rmse_checked;
 pub use reliability::{
     brier_decomposition, decompose_brier_score, BrierDecomposition, ReliabilityBin, SkillComponents,
 };
@@ -115,13 +116,10 @@ pub enum ReferenceStrategy {
 /// RMSE of the persistence forecast over a time-ordered observation series.
 ///
 /// `error[i] = observed[i] - observed[i-1]` for i ≥ 1.
-/// Returns 0.0 when fewer than two observations are supplied.
+/// Panics for fewer than two observations, non-finite values or overflow.
+/// Use [`persistence_rmse_checked`] for a fallible interface.
 pub fn persistence_rmse(observations: &[f64]) -> f64 {
-    if observations.len() < 2 {
-        return 0.0;
-    }
-    let sse: f64 = observations.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
-    (sse / (observations.len() - 1) as f64).sqrt()
+    persistence_rmse_checked(observations).expect("persistence_rmse preconditions violated")
 }
 
 /// Accuracy metrics from forecast verification.
@@ -187,41 +185,27 @@ impl ForecastAccuracyMetrics {
     /// Compute metrics against a chosen reference baseline.
     ///
     /// All continuous metrics (MAE, RMSE, bias) are the same as `from_pairs()`.
-    /// Only `skill_score` changes: `1.0 − (rmse / reference_rmse)`, clamped to
-    /// `[0, 1]`. See [`ReferenceStrategy`] for baseline options.
+    /// Persistence compares both errors on pairs[1..], with zero skill for a
+    /// zero-error tie or insufficient history. Other references use the full
+    /// window. Panics on malformed independent baselines; use the `_checked`
+    /// variant for explicit errors. SampleStdDev retains legacy behavior.
     pub fn from_pairs_with_reference(pairs: &[Pair], reference: ReferenceStrategy) -> Self {
-        let mae_val = mae(pairs);
-        let rmse_val = rmse(pairs);
-        let bias_val = bias(pairs);
-        let skill_score = if pairs.is_empty() {
-            0.0
-        } else {
-            let ref_rmse = match reference {
-                ReferenceStrategy::SampleStdDev => {
-                    let n = pairs.len() as f64;
-                    let mean_obs = pairs.iter().map(|p| p.observed).sum::<f64>() / n;
-                    let var = pairs
-                        .iter()
-                        .map(|p| (p.observed - mean_obs).powi(2))
-                        .sum::<f64>()
-                        / n;
-                    var.sqrt()
-                }
-                ReferenceStrategy::FixedClimatology { reference_rmse } => reference_rmse,
-                ReferenceStrategy::Persistence => {
-                    let obs: Vec<f64> = pairs.iter().map(|p| p.observed).collect();
-                    persistence_rmse(&obs)
-                }
-            };
-            if ref_rmse > 0.0 {
-                (1.0 - rmse_val / ref_rmse).clamp(0.0, 1.0)
-            } else if rmse_val == 0.0 {
-                1.0
-            } else {
-                0.0
-            }
-        };
-        Self { mae: mae_val, rmse: rmse_val, bias: bias_val, skill_score }
+        if reference == ReferenceStrategy::SampleStdDev {
+            return Self::from_pairs(pairs);
+        }
+        if reference == ReferenceStrategy::Persistence && pairs.len() < 2 {
+            let mut metrics = Self::from_pairs(pairs);
+            assert!(pairs
+                .iter()
+                .all(|p| p.predicted.is_finite() && p.observed.is_finite()));
+            metrics
+                .validate()
+                .expect("reference metrics must be finite");
+            metrics.skill_score = 0.0;
+            return metrics;
+        }
+        Self::from_pairs_with_reference_checked(pairs, reference)
+            .expect("reference scoring preconditions violated")
     }
 
     /// Validate that all fields are finite and within expected ranges.
@@ -420,7 +404,9 @@ mod tests {
         let data = pairs(&[(0.5, 0.0), (0.5, 1.0)]);
         let m = ForecastAccuracyMetrics::from_pairs_with_reference(
             &data,
-            ReferenceStrategy::FixedClimatology { reference_rmse: 1.0 },
+            ReferenceStrategy::FixedClimatology {
+                reference_rmse: 1.0,
+            },
         );
         assert!((m.skill_score - 0.5).abs() < 1e-12);
     }
@@ -430,7 +416,9 @@ mod tests {
         let data = pairs(&[(1.0, 1.0), (2.0, 2.0)]);
         let m = ForecastAccuracyMetrics::from_pairs_with_reference(
             &data,
-            ReferenceStrategy::FixedClimatology { reference_rmse: 2.0 },
+            ReferenceStrategy::FixedClimatology {
+                reference_rmse: 2.0,
+            },
         );
         assert_eq!(m.skill_score, 1.0);
     }
@@ -479,9 +467,10 @@ mod tests {
     }
 
     #[test]
-    fn persistence_rmse_single_returns_zero() {
-        assert_eq!(persistence_rmse(&[5.0]), 0.0);
-        assert_eq!(persistence_rmse(&[]), 0.0);
+    fn persistence_rmse_requires_history() {
+        assert!(persistence_rmse_checked(&[5.0]).is_err());
+        assert!(persistence_rmse_checked(&[]).is_err());
+        assert!(std::panic::catch_unwind(|| persistence_rmse(&[5.0])).is_err());
     }
 
     #[test]
@@ -496,7 +485,9 @@ mod tests {
         let data = pairs(&[(0.0, 10.0), (0.0, 10.0)]); // RMSE = 10
         let m = ForecastAccuracyMetrics::from_pairs_with_reference(
             &data,
-            ReferenceStrategy::FixedClimatology { reference_rmse: 1.0 },
+            ReferenceStrategy::FixedClimatology {
+                reference_rmse: 1.0,
+            },
         );
         assert_eq!(m.skill_score, 0.0);
     }
