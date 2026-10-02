@@ -23,9 +23,9 @@ pub struct BrierDecomposition {
     /// Overall Brier score for this sample.
     pub brier_score: f64,
     /// Calibration term: mean squared deviation of forecast probabilities from observed
-    /// frequencies within each bin. Lower = better calibrated.
+    /// frequencies for each distinct forecast probability. Lower = better calibrated.
     pub reliability: f64,
-    /// Resolution term: mean squared deviation of per-bin observed frequencies from the
+    /// Resolution term: mean squared deviation of per-category observed frequencies from the
     /// overall base rate. Higher = more informative.
     pub resolution: f64,
     /// Uncertainty: base-rate variance `p̄(1 − p̄)`. Depends only on observations.
@@ -40,8 +40,10 @@ pub struct BrierDecomposition {
 /// Compute the full Murphy (1973) Brier score decomposition.
 ///
 /// Returns reliability, resolution, uncertainty, BSS, and per-bin data for
-/// reliability diagram plots. `n_bins` equal-width probability bins are used
-/// (typical values: 10 or 20).
+/// reliability diagram plots. Components use distinct forecast probabilities,
+/// as required for the exact Murphy identity. `n_bins` controls only the
+/// equal-width diagram bins (typical values: 10 or 20). Coarsening different
+/// probabilities into one category would change the score being decomposed.
 ///
 /// Returns `Err` when inputs are malformed (length mismatch, non-finite values,
 /// probabilities outside [0, 1], or `n_bins == 0`).
@@ -91,16 +93,11 @@ pub fn brier_decomposition(
         a.sum_outcome += outcome;
     }
 
-    let mut reliability = 0.0;
-    let mut resolution = 0.0;
     let mut bins: Vec<ReliabilityBin> = Vec::with_capacity(n_bins);
 
     for acc in accs.into_iter().filter(|a| a.count > 0) {
-        let w = acc.count as f64 / n;
         let mean_p = acc.sum_prob / acc.count as f64;
         let obs_freq = acc.sum_outcome / acc.count as f64;
-        reliability += w * (mean_p - obs_freq).powi(2);
-        resolution += w * (obs_freq - base_rate).powi(2);
         bins.push(ReliabilityBin {
             mean_forecast_prob: mean_p,
             observed_frequency: obs_freq,
@@ -112,6 +109,28 @@ pub fn brier_decomposition(
             .partial_cmp(&b.mean_forecast_prob)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    // Inputs were checked above, so every probability is finite. Sort exact
+    // categories instead of rounding; diagram resolution must not affect skill.
+    let mut cases: Vec<_> = forecast_probs.iter().zip(observed_outcomes).collect();
+    cases.sort_by(|(a, _), (b, _)| a.total_cmp(b));
+    let mut reliability = 0.0;
+    let mut resolution = 0.0;
+    let mut start = 0;
+    while start < cases.len() {
+        let prob = *cases[start].0;
+        let mut end = start + 1;
+        let mut events = *cases[start].1;
+        while end < cases.len() && *cases[end].0 == prob {
+            events += cases[end].1;
+            end += 1;
+        }
+        let count = (end - start) as f64;
+        let observed_frequency = events / count;
+        reliability += count / n * (prob - observed_frequency).powi(2);
+        resolution += count / n * (observed_frequency - base_rate).powi(2);
+        start = end;
+    }
 
     let uncertainty = base_rate * (1.0 - base_rate);
     let brier_skill_score = if uncertainty > 0.0 {
@@ -147,62 +166,22 @@ pub struct SkillComponents {
     pub brier_skill_score: f64,
 }
 
-/// Murphy-style decomposition of the Brier score using equal-width probability bins.
+/// Exact Murphy components with sharpness; `bins` controls diagram binning only.
 pub fn decompose_brier_score(
     forecast_probs: &[f64],
     observed_outcomes: &[f64],
     bins: usize,
 ) -> Result<SkillComponents, ScoreError> {
-    brier_score_checked(forecast_probs, observed_outcomes)?;
     if bins == 0 {
         return Err(ScoreError::InvalidInput("bins must be greater than zero"));
     }
+    let decomposition = brier_decomposition(forecast_probs, observed_outcomes, bins)?;
     if forecast_probs.is_empty() {
         return Ok(SkillComponents::default());
     }
 
-    #[derive(Clone, Copy, Default)]
-    struct BinStats {
-        count: usize,
-        sum_prob: f64,
-        sum_outcome: f64,
-    }
-
     let sample_count = forecast_probs.len() as f64;
     let climatology_rate = observed_outcomes.iter().sum::<f64>() / sample_count;
-    let mut stats = vec![BinStats::default(); bins];
-
-    for (&prob, &outcome) in forecast_probs.iter().zip(observed_outcomes.iter()) {
-        let index = if prob >= 1.0 {
-            bins - 1
-        } else {
-            ((prob * bins as f64).floor() as usize).min(bins - 1)
-        };
-        let bin = &mut stats[index];
-        bin.count += 1;
-        bin.sum_prob += prob;
-        bin.sum_outcome += outcome;
-    }
-
-    let mut reliability = 0.0;
-    let mut resolution = 0.0;
-
-    for bin in stats.into_iter().filter(|bin| bin.count > 0) {
-        let weight = bin.count as f64 / sample_count;
-        let mean_prob = bin.sum_prob / bin.count as f64;
-        let observed_rate = bin.sum_outcome / bin.count as f64;
-        reliability += weight * (mean_prob - observed_rate).powi(2);
-        resolution += weight * (observed_rate - climatology_rate).powi(2);
-    }
-
-    let uncertainty = climatology_rate * (1.0 - climatology_rate);
-    let brier_skill_score = if uncertainty > 0.0 {
-        (resolution - reliability) / uncertainty
-    } else if reliability == 0.0 {
-        1.0
-    } else {
-        0.0
-    };
 
     let max_spread = climatology_rate.max(1.0 - climatology_rate);
     let sharpness = if max_spread > 0.0 {
@@ -217,10 +196,10 @@ pub fn decompose_brier_score(
     };
 
     Ok(SkillComponents {
-        reliability,
-        resolution,
+        reliability: decomposition.reliability,
+        resolution: decomposition.resolution,
         sharpness: sharpness.clamp(0.0, 1.0),
-        brier_skill_score,
+        brier_skill_score: decomposition.brier_skill_score,
     })
 }
 
@@ -266,7 +245,10 @@ mod tests {
     #[test]
     fn brier_decomposition_rejects_zero_bins() {
         let err = brier_decomposition(&[0.5], &[1.0], 0).unwrap_err();
-        assert_eq!(err, ScoreError::InvalidInput("n_bins must be greater than zero"));
+        assert_eq!(
+            err,
+            ScoreError::InvalidInput("n_bins must be greater than zero")
+        );
     }
 
     #[test]
@@ -280,7 +262,7 @@ mod tests {
     fn brier_decomposition_perfect_forecast() {
         // Forecaster always says 1.0 when event occurs, 0.0 otherwise
         let probs = vec![1.0, 1.0, 0.0, 0.0];
-        let obs   = vec![1.0, 1.0, 0.0, 0.0];
+        let obs = vec![1.0, 1.0, 0.0, 0.0];
         let d = brier_decomposition(&probs, &obs, 10).unwrap();
         assert!((d.brier_score).abs() < 1e-10);
         assert!((d.reliability).abs() < 1e-10);
@@ -291,19 +273,25 @@ mod tests {
     fn brier_decomposition_identity_bs() {
         // brier_score via decomposition must match direct brier_score()
         let probs = vec![0.1, 0.4, 0.6, 0.9];
-        let obs   = vec![0.0, 0.0, 1.0, 1.0];
+        let obs = vec![0.0, 0.0, 1.0, 1.0];
         let d = brier_decomposition(&probs, &obs, 10).unwrap();
         let direct = brier_score(&probs, &obs);
         // BS = Reliability - Resolution + Uncertainty
         let reconstructed = d.reliability - d.resolution + d.uncertainty;
-        assert!((reconstructed - direct).abs() < 1e-10, "decomposition identity");
+        assert!(
+            (reconstructed - direct).abs() < 1e-10,
+            "decomposition identity"
+        );
         assert!((d.brier_score - direct).abs() < 1e-10);
     }
 
     #[test]
     fn brier_decomposition_bins_sorted() {
         let probs: Vec<f64> = (0..=10).map(|i| i as f64 / 10.0).collect();
-        let obs:   Vec<f64> = probs.iter().map(|p| if *p > 0.5 { 1.0 } else { 0.0 }).collect();
+        let obs: Vec<f64> = probs
+            .iter()
+            .map(|p| if *p > 0.5 { 1.0 } else { 0.0 })
+            .collect();
         let d = brier_decomposition(&probs, &obs, 5).unwrap();
         for w in d.bins.windows(2) {
             assert!(w[0].mean_forecast_prob <= w[1].mean_forecast_prob);
