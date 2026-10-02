@@ -1,0 +1,7 @@
+{
+  "source": "Ebert 2007 ECMWF Verification of Probability Forecasts, slides 10,18,24",
+  "url": "https://www.ecmwf.int/sites/default/files/elibrary/2007/15489-verification-probability-forecasts.pdf",
+  "rows": [[0.0,46,1],[0.1,55,1],[0.2,59,5],[0.3,41,5],[0.4,19,4],[0.5,22,8],[0.6,22,6],[0.7,34,16],[0.8,24,16],[0.9,11,8],[1.0,13,11]],
+  "expected": {"mae":0.2898843930635838,"rmse":0.3801049444378844,"bias":0.1338150289017341,"brier":0.14447976878612717,"contingency":[65,16,61,204]},
+  "published_brier":0.1445
+}

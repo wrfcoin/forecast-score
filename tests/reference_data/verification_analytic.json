@@ -1,0 +1,6 @@
+{
+  "source": "Synthetic analytic cases, not sampled weather. Ebert 2005 ensemble-verification CDF definition, slide 25",
+  "url": "https://www.ecmwf.int/sites/default/files/elibrary/2005/15865-verification-ensembles.pdf",
+  "ensembles": [{"members":[2,4,6],"observed":1},{"members":[2,4,6],"observed":3},{"members":[2,4,6],"observed":5},{"members":[2,4,6],"observed":7}],
+  "expected": {"mae":2,"rmse":2.23606797749979,"bias":0,"crps_ensemble":1.4444444444444444,"spread_skill":0.7302967433402214,"ranks":[1,1,1,1]}
+}

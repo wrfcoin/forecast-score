@@ -248,6 +248,14 @@ match brier_score_checked(&[0.5, 0.8], &[1.0]) {
 - Anti-gaming helpers are additive APIs and do not change receipt or binding shapes.
 - The `meteo-types` dependency is feature-gated so the default build remains lightweight.
 
+## Reference tests and benchmarks
+
+Run `cargo test --test reference_benchmarks` for the small known-answer suite
+and `cargo bench --bench reference_scoring` for Criterion timings on the same
+inputs. [Dataset provenance, tolerances and analytic derivations](docs/reference-benchmarks.md)
+are checked in; tests do not fetch weather data. Use `-- --test` for a bench
+smoke run. The optional meteo-types path dependency requires a sibling checkout.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
