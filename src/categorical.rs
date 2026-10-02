@@ -3,7 +3,7 @@
 //! These metrics evaluate yes/no forecasts (e.g., "will it rain?") using
 //! a contingency table of hits, misses, and false alarms.
 
-use crate::Pair;
+use crate::{Pair, ScoreError};
 use serde::{Deserialize, Serialize};
 
 /// Probability of Detection (hit rate).
@@ -61,6 +61,13 @@ pub struct CategoricalScores {
     pub pod: f64,
     pub far: f64,
     pub csi: f64,
+    /// Defaults permit reading historical JSON; zero means unavailable there.
+    #[serde(default)]
+    pub hss: f64,
+    #[serde(default)]
+    pub ets: f64,
+    #[serde(default)]
+    pub frequency_bias: f64,
 }
 
 /// Compute categorical scores for a set of continuous forecast–observation pairs
@@ -94,6 +101,9 @@ pub fn categorical_scores(pairs: &[Pair], threshold: f64) -> CategoricalScores {
         pod: pod(hits, misses),
         far: far(hits, false_alarms),
         csi: csi(hits, misses, false_alarms),
+        hss: hss(hits, misses, false_alarms, correct_negatives),
+        ets: ets(hits, misses, false_alarms, correct_negatives),
+        frequency_bias: frequency_bias(hits, misses, false_alarms),
     }
 }
 
@@ -165,32 +175,77 @@ pub struct RocPoint {
     pub true_positive_rate: f64,
 }
 
-/// Compute a ROC curve by sweeping across `thresholds` for `pairs`.
+/// Compute a probability ROC curve with binary observed outcomes (0 or 1).
 ///
-/// Returns one `RocPoint` per threshold, sorted by ascending false_positive_rate.
-/// Use `auc_from_roc` to compute the area under the resulting curve.
-pub fn roc_curve(pairs: &[Pair], mut thresholds: Vec<f64>) -> Vec<RocPoint> {
-    thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mut points: Vec<RocPoint> = thresholds
+/// Only the forecast decision threshold varies; observed classes stay constant.
+/// Points are sorted by descending threshold (ascending FPR and TPR), preserving
+/// vertical segments for trapezoidal AUC. Include thresholds above 1 and at 0
+/// to cover both endpoints. No endpoints are added implicitly.
+///
+/// Panics on invalid probabilities/outcomes or non-finite thresholds. For
+/// continuous variables and a fallible interface, use
+/// [`roc_curve_with_observed_threshold`].
+pub fn roc_curve(pairs: &[Pair], thresholds: Vec<f64>) -> Vec<RocPoint> {
+    let probabilities: Vec<_> = pairs.iter().map(|p| p.predicted).collect();
+    let outcomes: Vec<_> = pairs.iter().map(|p| p.observed).collect();
+    crate::brier_score_checked(&probabilities, &outcomes)
+        .expect("roc_curve requires finite probabilities and binary outcomes");
+    roc_curve_with_observed_threshold(pairs, thresholds, 0.5)
+        .expect("roc_curve requires finite thresholds")
+}
+
+/// ROC for continuous forecasts with a single, constant observed event cutoff.
+///
+/// An event is `observed >= observed_threshold` at every forecast cutoff. This
+/// supports precipitation amounts as well as probabilities with binary labels.
+/// Returns one point per forecast threshold in descending threshold order.
+/// Empty inputs or absent observed classes retain the zero-rate convention.
+pub fn roc_curve_with_observed_threshold(
+    pairs: &[Pair],
+    mut thresholds: Vec<f64>,
+    observed_threshold: f64,
+) -> Result<Vec<RocPoint>, ScoreError> {
+    if !observed_threshold.is_finite()
+        || !thresholds.iter().all(|t| t.is_finite())
+        || !pairs
+            .iter()
+            .all(|p| p.predicted.is_finite() && p.observed.is_finite())
+    {
+        return Err(ScoreError::InvalidInput(
+            "ROC inputs and thresholds must be finite",
+        ));
+    }
+    thresholds.sort_by(|a, b| b.total_cmp(a));
+    let points: Vec<RocPoint> = thresholds
         .into_iter()
         .map(|t| {
-            let scores = categorical_scores(pairs, t);
-            let tpr = pod(scores.hits, scores.misses);
-            let total_neg = scores.false_alarms + scores.correct_negatives;
+            let mut hits = 0;
+            let mut misses = 0;
+            let mut false_alarms = 0;
+            let mut correct_negatives = 0;
+            for p in pairs {
+                match (p.predicted >= t, p.observed >= observed_threshold) {
+                    (true, true) => hits += 1,
+                    (false, true) => misses += 1,
+                    (true, false) => false_alarms += 1,
+                    (false, false) => correct_negatives += 1,
+                }
+            }
+            let tpr = pod(hits, misses);
+            let total_neg = false_alarms + correct_negatives;
             let fpr = if total_neg == 0 {
                 0.0
             } else {
-                scores.false_alarms as f64 / total_neg as f64
+                false_alarms as f64 / total_neg as f64
             };
-            RocPoint { threshold: t, false_positive_rate: fpr, true_positive_rate: tpr }
+            RocPoint {
+                threshold: t,
+                false_positive_rate: fpr,
+                true_positive_rate: tpr,
+            }
         })
         .collect();
-    points.sort_by(|a, b| {
-        a.false_positive_rate
-            .partial_cmp(&b.false_positive_rate)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    points
+    Ok(points)
 }
 
 /// Compute the Area Under the ROC Curve (AUC) via the trapezoidal rule.
@@ -305,7 +360,8 @@ mod tests {
     #[test]
     fn roc_and_auc_perfect() {
         // Perfect binary classifier: all positives score 1.0, all negatives 0.0
-        let pairs: Vec<Pair> = (0..5).map(|_| Pair::new(1.0, 1.0))
+        let pairs: Vec<Pair> = (0..5)
+            .map(|_| Pair::new(1.0, 1.0))
             .chain((0..5).map(|_| Pair::new(0.0, 0.0)))
             .collect();
         let thresholds = vec![0.5];
@@ -319,9 +375,21 @@ mod tests {
     fn auc_from_roc_unit_square() {
         // Perfect ROC passes through (0,1): AUC should be 1.0 with anchor points
         let points = vec![
-            RocPoint { threshold: 1.0, false_positive_rate: 0.0, true_positive_rate: 0.0 },
-            RocPoint { threshold: 0.5, false_positive_rate: 0.0, true_positive_rate: 1.0 },
-            RocPoint { threshold: 0.0, false_positive_rate: 1.0, true_positive_rate: 1.0 },
+            RocPoint {
+                threshold: 1.0,
+                false_positive_rate: 0.0,
+                true_positive_rate: 0.0,
+            },
+            RocPoint {
+                threshold: 0.5,
+                false_positive_rate: 0.0,
+                true_positive_rate: 1.0,
+            },
+            RocPoint {
+                threshold: 0.0,
+                false_positive_rate: 1.0,
+                true_positive_rate: 1.0,
+            },
         ];
         let auc = auc_from_roc(&points);
         assert!((auc - 1.0).abs() < 1e-10);
@@ -330,7 +398,11 @@ mod tests {
     #[test]
     fn auc_empty() {
         assert_eq!(auc_from_roc(&[]), 0.0);
-        let single = vec![RocPoint { threshold: 0.5, false_positive_rate: 0.5, true_positive_rate: 0.5 }];
+        let single = vec![RocPoint {
+            threshold: 0.5,
+            false_positive_rate: 0.5,
+            true_positive_rate: 0.5,
+        }];
         assert_eq!(auc_from_roc(&single), 0.0);
     }
 }

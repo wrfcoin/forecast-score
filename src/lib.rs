@@ -36,7 +36,7 @@ pub use anti_gaming::{
 };
 pub use categorical::{
     auc_from_roc, categorical_scores, csi, ets, far, frequency_bias, hss, pod, roc_curve,
-    CategoricalScores, RocPoint,
+    roc_curve_with_observed_threshold, CategoricalScores, RocPoint,
 };
 pub use continuous::{bias, mae, rmse};
 pub use probabilistic::{
