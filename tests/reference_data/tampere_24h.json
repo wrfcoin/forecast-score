@@ -1,0 +1,6 @@
+{
+  "source": "Ebert, Verification of Probability Forecasts, 2007 workshop, slides 10 and 18",
+  "url": "https://www.ecmwf.int/sites/default/files/elibrary/2007/15489-verification-probability-forecasts.pdf",
+  "rows": [[0.0,46,1],[0.1,55,1],[0.2,59,5],[0.3,41,5],[0.4,19,4],[0.5,22,8],[0.6,22,6],[0.7,34,16],[0.8,24,16],[0.9,11,8],[1.0,13,11]],
+  "published": {"brier_score":0.1445,"reliability":0.02536,"resolution":0.06017,"uncertainty":0.1793,"brier_skill_score":0.1942}
+}
