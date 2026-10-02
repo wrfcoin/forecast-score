@@ -1,0 +1,22 @@
+name: Reference scoring tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: reference-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  reference-tests:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: '3'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test default library and compile Criterion targets
+        run: |
+          python3 -m unittest discover -s scripts/tests
+          python3 scripts/test_default_features.py
