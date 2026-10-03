@@ -1,5 +1,10 @@
 # forecast-score
 
+> **Non-authoritative for WRFCoin consensus.** B3.1 compiles the separate
+> `wrfcoin-forecast-score` path crate inside core4. A merge here does not change
+> node scoring or rewards. See the [pinned authority and drift note](docs/core4-scoring-authority.md)
+> before interpreting standalone anti-gaming results as chain behavior.
+
 Forecast verification metrics for meteorological and probabilistic predictions.
 
 `forecast-score` provides the standard verification scores used in numerical weather prediction
@@ -204,13 +209,10 @@ Bindings are captured at construction, not reread during signing. The deprecated
 `signing_message()` and `has_valid_signature()` wrappers are mainnet-only
 compatibility APIs; migrate callers to the explicit methods.
 
-This crate was extracted from the [WRFCoin](https://github.com/wrfcoin) blockchain platform, which
-uses these metrics in its consensus-level forecast verification pipeline. The TypeScript source
-(`backend/server/services/forecast/forecast-verification-service.ts`, ~750 LOC) was ported to Rust
-to serve as the canonical implementation.
-
-Within WRFCoin, `ForecastAccuracyMetrics` feeds into `ForecastVerificationReceipt` in the Proof-of-Publishing
-consensus engine, determining collector rewards based on forecast accuracy.
+This standalone crate was extracted from the [WRFCoin](https://github.com/wrfcoin) blockchain platform
+and includes additional reference metrics. Its `ForecastAccuracyMetrics` shape is related to the
+receipt type, but the node compiles the separate core4 crate. Standalone helpers and tests do not
+establish the score used by an authorized oracle, consensus payout behavior or deployed inclusion.
 
 See the [Rust crate audit table](https://github.com/wrfcoin/core4/blob/main/docs/plans/wrfcoin_rust_crate_audit_table.md)
 for the full extraction plan and related crates (`meteo-types`, `wrf-primitives`, `reward-engine`, etc.).
