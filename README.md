@@ -1,5 +1,11 @@
 # forecast-score
 
+## Public testnet
+
+Public testnet launch: **2026-10-22**. Testnet tokens have no monetary value.
+Visit [WRFCoin](https://wrfcoin.com), read the [documentation](https://github.com/wrfcoin/docs),
+and ask for help in [testnet-support](https://github.com/wrfcoin/testnet-support).
+
 > **Non-authoritative for WRFCoin consensus.** B3.1 compiles the separate
 > `wrfcoin-forecast-score` path crate inside core4. A merge here does not change
 > node scoring or rewards. See the [pinned authority and drift note](docs/core4-scoring-authority.md)
