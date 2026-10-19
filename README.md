@@ -1,10 +1,30 @@
 # forecast-score
 
+Standalone Rust forecast-verification metrics and reference scoring helpers.
+
+**Non-authoritative for consensus:** core4 compiles a separate scoring crate. Results here do not establish node rewards or payout readiness.
+
 ## Public testnet
 
-Public testnet launch: **2026-10-22**. Testnet tokens have no monetary value.
-Visit [WRFCoin](https://wrfcoin.com), read the [documentation](https://github.com/wrfcoin/docs),
-and ask for help in [testnet-support](https://github.com/wrfcoin/testnet-support).
+Public testnet launch: **2026-10-22**. Testnet tokens have no monetary value, and the network may be reset.
+
+- [WRFCoin website](https://wrfcoin.com)
+- [Public testnet quickstart](https://github.com/wrfcoin/docs/blob/main/testnet/quickstart.md)
+- [Help and bug reports](https://github.com/wrfcoin/testnet-support)
+- [Security reporting](SECURITY.md)
+
+## Today and planned work
+
+| Status | Scope |
+| --- | --- |
+| Available in this repository today | Continuous, categorical and probabilistic metrics, baseline-aware scoring and recorded reference benchmarks. |
+| Planned / not available here | Any change to consensus scoring must be implemented and reviewed in core4; this repository does not activate node behavior. |
+
+## Build and use
+
+See [CONTRIBUTING.md](CONTRIBUTING.md#build-and-test) for prerequisites and build/test commands. CI results apply only to the named commit and executed checks; they do not prove deployment.
+
+Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
 
 > **Non-authoritative for WRFCoin consensus.** B3.1 compiles the separate
 > `wrfcoin-forecast-score` path crate inside core4. A merge here does not change
@@ -220,10 +240,7 @@ and includes additional reference metrics. Its `ForecastAccuracyMetrics` shape i
 receipt type, but the node compiles the separate core4 crate. Standalone helpers and tests do not
 establish the score used by an authorized oracle, consensus payout behavior or deployed inclusion.
 
-See the [Rust crate audit table](https://github.com/wrfcoin/core4/blob/main/docs/plans/wrfcoin_rust_crate_audit_table.md)
-for the full extraction plan and related crates (`meteo-types`, `wrf-primitives`, `reward-engine`, etc.).
-
-Tracking issue: [wrfcoin/core4#544](https://github.com/wrfcoin/core4/issues/544)
+See the authority note above for the boundary between standalone reference code and core4.
 
 ## Error handling
 
