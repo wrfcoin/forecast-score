@@ -11,7 +11,9 @@ See [which forecast-score to use](docs/forecast-score-reconciliation.md) and the
 
 Test status (2026-10-19): `cargo test` passed at `0c244f7f54c1` on Linux (146 passed, 0 ignored; default features; local tests, not deployment evidence).
 
-Public testnet launch: **2026-10-22**. Testnet tokens have no monetary value, and the network may be reset.
+Public testnet launch: **2026-10-22**.
+
+This is a test network. It may be reset without notice. Balances and tokens have no monetary value. No migration to mainnet is promised or implied. Please attach no production bridges, exchange listings or irreplaceable assets.
 
 - [WRFCoin website](https://wrfcoin.com)
 - [Public testnet quickstart](https://github.com/wrfcoin/docs/blob/main/testnet/quickstart.md)
