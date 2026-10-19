@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Launch preparation
+
+- Clarify reference scoring and its authority boundary with core4. ([#38](https://github.com/wrfcoin/forecast-score/pull/38))
+- Document the comparison between standalone and core4 scoring implementations. ([#39](https://github.com/wrfcoin/forecast-score/pull/39))
+- Add the canonical public-testnet disclaimer. ([#40](https://github.com/wrfcoin/forecast-score/pull/40))
+
+
 ### Added
 - Anti-gaming scoring helpers: `ScoringConfig`, `AntiGamingScore`, lead-time validation, and baseline-aware scoring
 - Murphy-style Brier decomposition via `decompose_brier_score()` and `SkillComponents`
