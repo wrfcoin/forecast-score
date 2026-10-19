@@ -4,7 +4,12 @@ Standalone Rust forecast-verification metrics and reference scoring helpers.
 
 **Non-authoritative for consensus:** core4 compiles a separate scoring crate. Results here do not establish node rewards or payout readiness.
 
+See [which forecast-score to use](docs/forecast-score-reconciliation.md) and the
+[chain-facing implementation in core4](https://github.com/wrfcoin/core4/tree/main/forecast-score).
+
 ## Public testnet
+
+Test status (2026-10-19): `cargo test` passed at `0c244f7f54c1` on Linux (146 passed, 0 ignored; default features; local tests, not deployment evidence).
 
 Public testnet launch: **2026-10-22**. Testnet tokens have no monetary value, and the network may be reset.
 
