@@ -16,6 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88.0"
       - name: Test default library and compile Criterion targets
         run: |
           python3 -m unittest discover -s scripts/tests
