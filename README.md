@@ -236,8 +236,11 @@ construct it with `ChainBinding::new(chain_id, network_id)` or
 `ChainBinding::from_env()`, then use `signing_message_with(&binding)` and
 `has_valid_signature_with(&binding)`. Environment construction requires both
 `WRFCOIN_CHAIN_ID` and `WRFCOIN_NETWORK_ID`; unset or blank values are errors
-that name the variable. For example, use `777` / `testnet` for that test chain,
+that name the variable. For example, use `888` / `testnet` for the post-cut test chain,
 or explicitly select `ChainBinding::MAINNET` for `wrfcoin-main` / `mainnet`.
+Before using the test chain, verify the owner-published genesis hash
+`553a3758386d9631037d7469686acb4a121ced81dcf5cde256e2d05667c5f332`; this placeholder is not a usable hash. Earlier-chain
+receipts and heights do not establish acceptance on the new genesis.
 Bindings are captured at construction, not reread during signing. The deprecated
 `signing_message()` and `has_valid_signature()` wrappers are mainnet-only
 compatibility APIs; migrate callers to the explicit methods.
